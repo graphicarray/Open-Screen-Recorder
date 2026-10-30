@@ -58,6 +58,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ./dist/InstallerPayload/brand | Out-Null
+          New-Item -ItemType Directory -Force -Path ./dist/Output | Out-Null
+
           Copy-Item ./publish/OpenScreenRecorder.exe ./dist/InstallerPayload/OpenScreenRecorder.exe -Force
           if (Test-Path ./publish/ffmpeg.exe) {
             Copy-Item ./publish/ffmpeg.exe ./dist/InstallerPayload/ffmpeg.exe -Force
@@ -66,7 +68,19 @@ jobs:
             Copy-Item ./brand/logo.svg ./dist/InstallerPayload/brand/logo.svg -Force
           }
 
-          # Generate NSIS Installer script (Installs to Program Files, creates Desktop & Start Menu shortcuts + Uninstaller)
+          # Locate makensis.exe or install NSIS via Chocolatey if not in runner image
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $cmd = Get-Command makensis -ErrorAction SilentlyContinue
+            if ($cmd) {
+              $makensis = $cmd.Source
+            } else {
+              Write-Host "Installing NSIS via Chocolatey..."
+              choco install nsis -y --no-progress
+              $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+            }
+          }
+
           $nsi = @'
           !include "MUI2.nsh"
 
@@ -102,7 +116,7 @@ jobs:
 
             WriteRegStr HKLM "Software\Graphicarray\Open Screen Recorder" "Install_Dir" "$INSTDIR"
             WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "DisplayName" "Open Screen Recorder (by Graphicarray)"
-            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "Publisher" "Graphicarray · Md Numan Ahmed"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "Publisher" "Graphicarray - Md Numan Ahmed"
             WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "URLInfoAbout" "https://www.linkedin.com/in/graphicarray"
             WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "DisplayIcon" "$INSTDIR\OpenScreenRecorder.exe"
             WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "DisplayVersion" "2.0.0"
@@ -133,7 +147,7 @@ jobs:
           '@
 
           Set-Content -Path ./installer.nsi -Value $nsi -Encoding ASCII
-          makensis ./installer.nsi
+          & "$makensis" ./installer.nsi
 
       - name: Upload Direct Install Setup EXE
         uses: actions/upload-artifact@v4
