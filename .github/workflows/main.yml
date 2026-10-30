@@ -1,8 +1,9 @@
-name: Build Open Screen Recorder EXE
+name: Build Open Screen Recorder (Installer EXE + Portable)
 
 on:
   push:
     branches: [ "main", "master" ]
+    tags: [ "v*" ]
   workflow_dispatch:
 
 jobs:
@@ -18,15 +19,132 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish Single-File EXE
-        run: dotnet publish OpenScreenRecorder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ./publish
+      - name: Publish Single-File Application Binary
+        run: |
+          dotnet publish OpenScreenRecorder.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ./publish
 
-      - name: Run Self-Check Tests
+      - name: Bundle Offline FFmpeg for MP4 and MKV Muxing
+        shell: pwsh
+        run: |
+          if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+            Copy-Item (Get-Command ffmpeg).Source ./publish/ffmpeg.exe -Force
+          }
+
+      - name: Run Self-Check Verification
         run: ./publish/OpenScreenRecorder.exe --self-check
 
-      - name: Upload OpenScreenRecorder EXE Artifact
+      - name: Build 1 - Create Portable Package (Single EXE + Portable ZIP)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ./dist/Portable/brand | Out-Null
+          New-Item -ItemType Directory -Force -Path ./dist/Output | Out-Null
+
+          Copy-Item ./publish/OpenScreenRecorder.exe ./dist/Portable/OpenScreenRecorder.exe -Force
+          if (Test-Path ./publish/ffmpeg.exe) {
+            Copy-Item ./publish/ffmpeg.exe ./dist/Portable/ffmpeg.exe -Force
+          }
+          if (Test-Path ./brand/logo.svg) {
+            Copy-Item ./brand/logo.svg ./dist/Portable/brand/logo.svg -Force
+          }
+
+          # Presence of Portable.db tells Open Screen Recorder to run in 100% Portable Mode
+          Set-Content -Path ./dist/Portable/Portable.db -Value "PORTABLE=1`nBRAND=Graphicarray`nPRODUCT=Open Screen Recorder" -Encoding UTF8
+
+          # Standalone Portable EXE and Portable ZIP (with Portable.db + ffmpeg.exe)
+          Copy-Item ./publish/OpenScreenRecorder.exe ./dist/Output/OpenScreenRecorder_Portable.exe -Force
+          Compress-Archive -Path ./dist/Portable/* -DestinationPath ./dist/Output/OpenScreenRecorder_Portable.zip -Force
+
+      - name: Build 2 - Create Direct Install Setup EXE (NSIS Installer)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ./dist/InstallerPayload/brand | Out-Null
+          Copy-Item ./publish/OpenScreenRecorder.exe ./dist/InstallerPayload/OpenScreenRecorder.exe -Force
+          if (Test-Path ./publish/ffmpeg.exe) {
+            Copy-Item ./publish/ffmpeg.exe ./dist/InstallerPayload/ffmpeg.exe -Force
+          }
+          if (Test-Path ./brand/logo.svg) {
+            Copy-Item ./brand/logo.svg ./dist/InstallerPayload/brand/logo.svg -Force
+          }
+
+          # Generate NSIS Installer script (Installs to Program Files, creates Desktop & Start Menu shortcuts + Uninstaller)
+          $nsi = @'
+          !include "MUI2.nsh"
+
+          Name "Open Screen Recorder"
+          OutFile "dist\Output\OpenScreenRecorder_Setup.exe"
+          InstallDir "$PROGRAMFILES64\Open Screen Recorder"
+          InstallDirRegKey HKLM "Software\Graphicarray\Open Screen Recorder" "Install_Dir"
+          RequestExecutionLevel admin
+          SetCompressor /SOLID lzma
+
+          !define MUI_ABORTWARNING
+          !define MUI_FINISHPAGE_RUN "$INSTDIR\OpenScreenRecorder.exe"
+          !define MUI_FINISHPAGE_RUN_TEXT "Launch Open Screen Recorder (by Graphicarray)"
+
+          !insertmacro MUI_PAGE_WELCOME
+          !insertmacro MUI_PAGE_DIRECTORY
+          !insertmacro MUI_PAGE_INSTFILES
+          !insertmacro MUI_PAGE_FINISH
+
+          !insertmacro MUI_UNPAGE_CONFIRM
+          !insertmacro MUI_UNPAGE_INSTFILES
+
+          !insertmacro MUI_LANGUAGE "English"
+
+          Section "Open Screen Recorder (Required)" SecMain
+            SectionIn RO
+            SetOutPath "$INSTDIR"
+
+            ; Ensure Portable.db is removed so installed app uses %AppData% and Registry
+            Delete "$INSTDIR\Portable.db"
+
+            File /r "dist\InstallerPayload\*.*"
+
+            WriteRegStr HKLM "Software\Graphicarray\Open Screen Recorder" "Install_Dir" "$INSTDIR"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "DisplayName" "Open Screen Recorder (by Graphicarray)"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "Publisher" "Graphicarray · Md Numan Ahmed"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "URLInfoAbout" "https://www.linkedin.com/in/graphicarray"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "DisplayIcon" "$INSTDIR\OpenScreenRecorder.exe"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "DisplayVersion" "2.0.0"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+            WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "NoModify" 1
+            WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder" "NoRepair" 1
+
+            WriteUninstaller "$INSTDIR\Uninstall.exe"
+
+            CreateDirectory "$SMPROGRAMS\Open Screen Recorder"
+            CreateShortcut "$SMPROGRAMS\Open Screen Recorder\Open Screen Recorder.lnk" "$INSTDIR\OpenScreenRecorder.exe"
+            CreateShortcut "$SMPROGRAMS\Open Screen Recorder\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
+            CreateShortcut "$DESKTOP\Open Screen Recorder.lnk" "$INSTDIR\OpenScreenRecorder.exe"
+          SectionEnd
+
+          Section "Uninstall"
+            Delete "$DESKTOP\Open Screen Recorder.lnk"
+            Delete "$SMPROGRAMS\Open Screen Recorder\*.*"
+            RMDir "$SMPROGRAMS\Open Screen Recorder"
+            RMDir /r "$INSTDIR\brand"
+            Delete "$INSTDIR\OpenScreenRecorder.exe"
+            Delete "$INSTDIR\ffmpeg.exe"
+            Delete "$INSTDIR\Uninstall.exe"
+            RMDir "$INSTDIR"
+            DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder"
+            DeleteRegKey HKLM "Software\Graphicarray\Open Screen Recorder"
+          SectionEnd
+          '@
+
+          Set-Content -Path ./installer.nsi -Value $nsi -Encoding ASCII
+          makensis ./installer.nsi
+
+      - name: Upload Direct Install Setup EXE
         uses: actions/upload-artifact@v4
         with:
-          name: OpenScreenRecorder-win-x64
+          name: OpenScreenRecorder-Direct-Installer-EXE
+          path: ./dist/Output/OpenScreenRecorder_Setup.exe
+
+      - name: Upload Portable EXE & ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenScreenRecorder-Portable
           path: |
-            ./publish/OpenScreenRecorder.exe
+            ./dist/Output/OpenScreenRecorder_Portable.exe
+            ./dist/Output/OpenScreenRecorder_Portable.zip
