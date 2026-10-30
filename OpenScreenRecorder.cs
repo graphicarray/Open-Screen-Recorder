@@ -224,32 +224,64 @@ namespace GraphicarrayCapture
             g.Restore(state);
         }
 
+        private static Icon _cachedDefaultIcon;
+        public static Icon AppDefaultIcon => _cachedDefaultIcon ??= CreateStatusIcon(0);
+
+        public static void ApplyWindowIcon(Form form, Icon icon = null)
+        {
+            if (form == null) return;
+            Icon target = icon ?? AppDefaultIcon;
+            form.Icon = target;
+            form.ShowIcon = true;
+            if (form.IsHandleCreated)
+            {
+                NativeMethods.SendMessage(form.Handle, NativeMethods.WM_SETICON, (IntPtr)NativeMethods.ICON_BIG, target.Handle);
+                NativeMethods.SendMessage(form.Handle, NativeMethods.WM_SETICON, (IntPtr)NativeMethods.ICON_SMALL, target.Handle);
+            }
+        }
+
         public static Icon CreateStatusIcon(int state)
         {
-            using (Bitmap bmp = new Bitmap(32, 32, PixelFormat.Format32bppArgb))
+            // state 0: try embedded executable icon or brand/logo.ico first, fallback to GDI+ vector logo
+            if (state == 0)
+            {
+                try
+                {
+                    string icoFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "brand", "logo.ico");
+                    if (File.Exists(icoFile))
+                        return new Icon(icoFile, new Size(64, 64));
+                    Icon exeIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                    if (exeIcon != null)
+                        return exeIcon;
+                }
+                catch { }
+            }
+
+            using (Bitmap bmp = new Bitmap(64, 64, PixelFormat.Format32bppArgb))
             using (Graphics g = Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                DrawLogoTile(g, new RectangleF(0, 0, 32, 32), false, false);
+                DrawLogoTile(g, new RectangleF(0, 0, 64, 64), false, false);
                 if (state == 1)
                 {
-                    using (SolidBrush redGlow = new SolidBrush(Color.FromArgb(190, Red)))
+                    // Blinking Red recording badge in bottom-right corner over the Graphicarray logo
+                    using (SolidBrush redGlow = new SolidBrush(Color.FromArgb(200, Red)))
                     using (SolidBrush redCore = new SolidBrush(Red))
-                    using (Pen whiteRing = new Pen(Text, 2f))
+                    using (Pen whiteRing = new Pen(Text, 3f))
                     {
-                        g.FillEllipse(redGlow, 2, 2, 28, 28);
-                        g.FillEllipse(redCore, 6, 6, 20, 20);
-                        g.DrawEllipse(whiteRing, 6, 6, 20, 20);
+                        g.FillEllipse(redGlow, 30, 30, 32, 32);
+                        g.FillEllipse(redCore, 34, 34, 24, 24);
+                        g.DrawEllipse(whiteRing, 34, 34, 24, 24);
                     }
                 }
                 else if (state == 2)
                 {
                     using (SolidBrush amberCore = new SolidBrush(Amber))
-                    using (Pen abyssPen = new Pen(Abyss, 2.5f))
+                    using (Pen abyssPen = new Pen(Abyss, 3.5f))
                     {
-                        g.FillEllipse(amberCore, 16, 16, 14, 14);
-                        g.DrawLine(abyssPen, 21, 19, 21, 27);
-                        g.DrawLine(abyssPen, 25, 19, 25, 27);
+                        g.FillEllipse(amberCore, 32, 32, 28, 28);
+                        g.DrawLine(abyssPen, 42, 38, 42, 54);
+                        g.DrawLine(abyssPen, 50, 38, 50, 54);
                     }
                 }
                 IntPtr hIcon = bmp.GetHicon();
@@ -306,6 +338,9 @@ namespace GraphicarrayCapture
     public static class NativeMethods
     {
         public const int WM_HOTKEY = 0x0312;
+        public const int WM_SETICON = 0x0080;
+        public const int ICON_SMALL = 0;
+        public const int ICON_BIG = 1;
         public const int WM_QUERYENDSESSION = 0x0011;
         public const int SM_XVIRTUALSCREEN = 76;
         public const int SM_YVIRTUALSCREEN = 77;
@@ -414,6 +449,7 @@ namespace GraphicarrayCapture
         [DllImport("user32.dll")] public static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyWidth, int istepIfAniCur, IntPtr hbrFlickerFreeDraw, int diFlags);
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
         [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr hIcon);
+        [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
         [DllImport("user32.dll")] public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
 
         [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
@@ -539,25 +575,25 @@ namespace GraphicarrayCapture
     public static class StorageEngine
     {
         public static string BaseDir => AppDomain.CurrentDomain.BaseDirectory;
-        public static string FscDbPath => Path.Combine(BaseDir, "fsc.db");
-        public static string TbSettingsPath => Path.Combine(BaseDir, "TBSettings.db");
         public static string PortableFlagPath => Path.Combine(BaseDir, "Portable.db");
-        public static string BrandLogoPath => Path.Combine(BaseDir, "brand", "logo.svg");
+        public static bool IsPortableInstallation => File.Exists(PortableFlagPath);
+        public static string DataDir => IsPortableInstallation
+            ? BaseDir
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Graphicarray", "OpenScreenRecorder");
+        public static string FscDbPath => Path.Combine(DataDir, "fsc.db");
+        public static string TbSettingsPath => Path.Combine(DataDir, "TBSettings.db");
+        public static string BrandLogoPath => Path.Combine(DataDir, "brand", "logo.svg");
         public const string RegistryKeyPath = @"Software\Graphicarray\Open Screen Recorder";
 
         public static void EnsureBrandAndPortableFiles(AppConfig cfg)
         {
             try
             {
-                string brandDir = Path.Combine(BaseDir, "brand");
+                Directory.CreateDirectory(DataDir);
+                string brandDir = Path.Combine(DataDir, "brand");
                 Directory.CreateDirectory(brandDir);
                 if (!File.Exists(BrandLogoPath))
                     File.WriteAllText(BrandLogoPath, GaBrand.OfficialLogoSvg, Encoding.UTF8);
-
-                if (cfg.PortableMode && !File.Exists(PortableFlagPath))
-                    File.WriteAllText(PortableFlagPath, "PORTABLE=1\nBRAND=Graphicarray\nPRODUCT=Open Screen Recorder\n", Encoding.UTF8);
-                else if (!cfg.PortableMode && File.Exists(PortableFlagPath))
-                    File.Delete(PortableFlagPath);
 
                 if (!string.IsNullOrWhiteSpace(cfg.AutoSaveFolder))
                     Directory.CreateDirectory(cfg.AutoSaveFolder);
@@ -570,7 +606,7 @@ namespace GraphicarrayCapture
             AppConfig cfg = new AppConfig();
             try
             {
-                cfg.PortableMode = File.Exists(PortableFlagPath) || !File.Exists(FscDbPath);
+                cfg.PortableMode = IsPortableInstallation;
                 if (File.Exists(FscDbPath))
                 {
                     string json = File.ReadAllText(FscDbPath, Encoding.UTF8);
@@ -1827,6 +1863,7 @@ namespace GraphicarrayCapture
             _removeBtnRects = new RectangleF[_cfg.Shortcuts.Count + 4];
 
             Text = "Open Screen Recorder — Shortcut Key Settings";
+            GaBrand.ApplyWindowIcon(this);
             Size = new Size(520, 560);
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -2097,7 +2134,7 @@ namespace GraphicarrayCapture
             {
                 if (_recorder.IsPaused)
                 {
-                    Icon = _iconPausedAmber;
+                    GaBrand.ApplyWindowIcon(this, _iconPausedAmber);
                     _trayIcon.Icon = _iconPausedAmber;
                     _trayIcon.Text = $"PAUSED · Open Screen Recorder ({_recorder.Elapsed:hh\\:mm\\:ss})";
                 }
@@ -2105,7 +2142,7 @@ namespace GraphicarrayCapture
                 {
                     _blinkRedPhase = !_blinkRedPhase;
                     Icon activeIcon = _blinkRedPhase ? _iconRecRed : _iconIdle;
-                    Icon = activeIcon;
+                    GaBrand.ApplyWindowIcon(this, activeIcon);
                     _trayIcon.Icon = activeIcon;
                     _trayIcon.Text = $"● REC {_recorder.Elapsed:hh\\:mm\\:ss} · Open Screen Recorder";
                     _guidelineOverlay?.SetBlinkPhase(_blinkRedPhase);
@@ -2114,7 +2151,7 @@ namespace GraphicarrayCapture
             }
             else if (Icon != _iconIdle)
             {
-                Icon = _iconIdle;
+                GaBrand.ApplyWindowIcon(this, _iconIdle);
                 _trayIcon.Icon = _iconIdle;
                 _trayIcon.Text = "Open Screen Recorder by Graphicarray";
                 Invalidate();
@@ -2124,6 +2161,7 @@ namespace GraphicarrayCapture
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
+            GaBrand.ApplyWindowIcon(this, _iconIdle);
             ReRegisterAllShortcuts();
         }
 
@@ -2378,6 +2416,7 @@ namespace GraphicarrayCapture
             using (Form dlg = new Form())
             {
                 dlg.Text = title;
+                GaBrand.ApplyWindowIcon(dlg);
                 dlg.Size = new Size(380, 210);
                 dlg.StartPosition = FormStartPosition.CenterParent;
                 dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -2568,6 +2607,7 @@ namespace GraphicarrayCapture
             using (Form prompt = new Form())
             {
                 prompt.Text = "Edit Video Auto-Save Directory Path";
+                GaBrand.ApplyWindowIcon(prompt);
                 prompt.Size = new Size(460, 170);
                 prompt.StartPosition = FormStartPosition.CenterParent;
                 prompt.BackColor = GaBrand.Abyss;
