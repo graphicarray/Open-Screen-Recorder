@@ -3,6 +3,8 @@ on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -41,3 +43,8 @@ jobs:
         with:
           name: OpenScreenRecorder-Portable
           path: ./dist/Output/OpenScreenRecorder_Portable.*
+      - name: Publish EXE Files to GitHub Releases Automatically
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view v2.0.0 2>$null; if ($LASTEXITCODE -ne 0) { gh release create v2.0.0 --title "Open Screen Recorder v2.0" --notes "Official Installer EXE and Portable Release by Graphicarray" }; gh release upload v2.0.0 ./dist/Output/OpenScreenRecorder_Setup.exe ./dist/Output/OpenScreenRecorder_Portable.exe ./dist/Output/OpenScreenRecorder_Portable.zip --clobber
