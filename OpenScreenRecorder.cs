@@ -3,8 +3,8 @@
 // Brand & Owner: Graphicarray · Md Numan Ahmed (https://www.linkedin.com/in/graphicarray)
 // Pure Video Recording Edition:
 //  - 5 Video Area Modes: Active Window, Rectangle (Free / Custom Ratio),
-//    Freehand, Full Screen, Fixed Region (Pixel Dimensions / Custom Ratio)
-//  - Live On-Screen Outer Guideline Frame during Rectangle, Freehand & Fixed recording
+//    Freehand, Full Screen
+//  - Live On-Screen Outer Guideline Frame during Rectangle & Freehand recording
 //  - Single-File Muxed Audio+Video OR Video-Only (No Audio)
 //  - Full Dropdown Menus for all value controls (Format, Quality, FPS, Audio, Cursor, Ratio)
 //  - Settings Gear -> Shortcut Key Manager Page (Add, Change, or Remove any hotkey)
@@ -555,19 +555,12 @@ namespace GraphicarrayCapture
         ActiveWindow = 0,
         Rectangle = 1,
         Freehand = 2,
-        FullScreen = 3,
-        FixedRegion = 4
+        FullScreen = 3
     }
 
     public enum RectangleSelectionSubMode
     {
         FreeArea = 0,
-        CustomRatio = 1
-    }
-
-    public enum FixedRegionSubMode
-    {
-        PixelDimensions = 0,
         CustomRatio = 1
     }
 
@@ -611,11 +604,8 @@ namespace GraphicarrayCapture
     {
         public VideoAreaMode ActiveAreaMode { get; set; } = VideoAreaMode.Rectangle;
         public RectangleSelectionSubMode RectangleSubMode { get; set; } = RectangleSelectionSubMode.FreeArea;
-        public FixedRegionSubMode FixedSubMode { get; set; } = FixedRegionSubMode.PixelDimensions;
         public int AspectRatioW { get; set; } = 16;
         public int AspectRatioH { get; set; } = 9;
-        public int FixedRegionWidth { get; set; } = 1280;
-        public int FixedRegionHeight { get; set; } = 720;
 
         public VideoFormatType VideoFormat { get; set; } = VideoFormatType.MP4;
         public VideoQualityLevel VideoQuality { get; set; } = VideoQualityLevel.High;
@@ -642,8 +632,7 @@ namespace GraphicarrayCapture
             new ShortcutBinding { ActionId = "ActiveWindow", ActionName = "Active Window Video Mode",     Key = Keys.F5, Alt = true },
             new ShortcutBinding { ActionId = "Rectangle",    ActionName = "Rectangle Video Mode",         Key = Keys.F6, Alt = true },
             new ShortcutBinding { ActionId = "Freehand",     ActionName = "Freehand Video Mode",          Key = Keys.F7, Alt = true },
-            new ShortcutBinding { ActionId = "FullScreen",   ActionName = "Full Screen Video Mode",       Key = Keys.F8, Alt = true },
-            new ShortcutBinding { ActionId = "FixedRegion",  ActionName = "Fixed Region Video Mode",      Key = Keys.F11, Alt = true }
+            new ShortcutBinding { ActionId = "FullScreen",   ActionName = "Full Screen Video Mode",       Key = Keys.F8, Alt = true }
         };
     }
 
@@ -690,6 +679,10 @@ namespace GraphicarrayCapture
                     {
                         if (loaded.Shortcuts == null || loaded.Shortcuts.Count == 0)
                             loaded.Shortcuts = AppConfig.DefaultShortcuts();
+                        // Migrate settings saved by older versions (Fixed Region mode was removed)
+                        loaded.Shortcuts.RemoveAll(sc => sc.ActionId == "FixedRegion");
+                        if (!Enum.IsDefined(typeof(VideoAreaMode), loaded.ActiveAreaMode))
+                            loaded.ActiveAreaMode = VideoAreaMode.Rectangle;
                         cfg = loaded;
                     }
                 }
@@ -763,7 +756,7 @@ namespace GraphicarrayCapture
     }
 
     // ========================================================================
-    // 4. LIVE ON-SCREEN OUTER GUIDELINE OVERLAY (Rectangle, Freehand, Fixed)
+    // 4. LIVE ON-SCREEN OUTER GUIDELINE OVERLAY (Rectangle, Freehand)
     // ========================================================================
     // Click-through topmost overlay that draws a 2px outer boundary around the
     // active recording area (or freehand polygon) so you see the exact recording
@@ -1736,7 +1729,7 @@ namespace GraphicarrayCapture
     }
 
     // ========================================================================
-    // 9. INTERACTIVE VIDEO REGION SELECTOR (Free / Ratio Rectangle, Freehand, Fixed)
+    // 9. INTERACTIVE VIDEO REGION SELECTOR (Free / Ratio Rectangle, Freehand)
     // ========================================================================
     public sealed class VideoAreaSelectorForm : Form
     {
@@ -1745,7 +1738,6 @@ namespace GraphicarrayCapture
         private readonly bool _lockRatio;
         private readonly int _ratioW;
         private readonly int _ratioH;
-        private readonly Size _fixedSize;
 
         private bool _dragging;
         private Point _startPt;
@@ -1755,13 +1747,12 @@ namespace GraphicarrayCapture
         public Rectangle SelectedBounds { get; private set; }
         public Point[] LocalFreehandPolygon { get; private set; }
 
-        public VideoAreaSelectorForm(VideoAreaMode mode, bool lockRatio, int ratioW, int ratioH, Size fixedSize)
+        public VideoAreaSelectorForm(VideoAreaMode mode, bool lockRatio, int ratioW, int ratioH)
         {
             _mode = mode;
             _lockRatio = lockRatio;
             _ratioW = Math.Max(1, ratioW);
             _ratioH = Math.Max(1, ratioH);
-            _fixedSize = new Size(Math.Max(32, fixedSize.Width & ~1), Math.Max(32, fixedSize.Height & ~1));
 
             Rectangle virtualBounds = ScreenCaptureEngine.GetVirtualDesktopBounds();
             _frozenDesktop = ScreenCaptureEngine.CaptureRegion(virtualBounds, includeCursor: false);
@@ -1788,17 +1779,6 @@ namespace GraphicarrayCapture
             _currentPt = e.Location;
             _freehandPts.Clear();
             _freehandPts.Add(e.Location);
-
-            if (_mode == VideoAreaMode.FixedRegion)
-            {
-                SelectedBounds = new Rectangle(
-                    e.X - _fixedSize.Width / 2 + Bounds.X,
-                    e.Y - _fixedSize.Height / 2 + Bounds.Y,
-                    _fixedSize.Width,
-                    _fixedSize.Height);
-                DialogResult = DialogResult.OK;
-                Close();
-            }
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -1870,13 +1850,9 @@ namespace GraphicarrayCapture
             using (SolidBrush dimBrush = new SolidBrush(Color.FromArgb(115, GaBrand.Abyss)))
                 g.FillRectangle(dimBrush, ClientRectangle);
 
-            Rectangle activeRect = _mode switch
-            {
-                VideoAreaMode.FixedRegion => new Rectangle(_currentPt.X - _fixedSize.Width / 2, _currentPt.Y - _fixedSize.Height / 2, _fixedSize.Width, _fixedSize.Height),
-                _ => _dragging
-                    ? (_lockRatio ? ScreenCaptureEngine.ComputeRatioLockedRect(_startPt, _currentPt, _ratioW, _ratioH) : GetFreeRubberBandRect(_startPt, _currentPt))
-                    : Rectangle.Empty
-            };
+            Rectangle activeRect = _dragging
+                ? (_lockRatio ? ScreenCaptureEngine.ComputeRatioLockedRect(_startPt, _currentPt, _ratioW, _ratioH) : GetFreeRubberBandRect(_startPt, _currentPt))
+                : Rectangle.Empty;
 
             if (_mode == VideoAreaMode.Freehand && _freehandPts.Count > 1)
             {
@@ -2147,6 +2123,7 @@ namespace GraphicarrayCapture
         private RectangleF _rectFooterLink;
         private RectangleF _rectSettingsGear;
         private RectangleF _rectAreaSubOptionDropdown;
+        private bool _showRectDropdown; // true only after the Rectangle button is clicked; hidden again by the other 3 modes
         private RectangleF _rectFormatDropdown;
         private RectangleF _rectQualityDropdown;
         private RectangleF _rectFpsDropdown;
@@ -2158,11 +2135,11 @@ namespace GraphicarrayCapture
         private RectangleF _rectPauseBtn;
         private RectangleF _rectPrimaryBtn;
         private readonly RectangleF[] _tabRects = new RectangleF[2];
-        private readonly RectangleF[] _modeRects = new RectangleF[5];
+        private readonly RectangleF[] _modeRects = new RectangleF[4];
 
         private static readonly string[] ModeTitles =
         {
-            "Active Window", "Rectangle", "Freehand", "Full Screen", "Fixed Region"
+            "Active Window", "Rectangle", "Freehand", "Full Screen"
         };
 
         public MainCaptureForm(AppConfig cfg)
@@ -2317,7 +2294,6 @@ namespace GraphicarrayCapture
                         case "Rectangle":    SelectVideoAreaMode(VideoAreaMode.Rectangle, showSubMenu: false); break;
                         case "Freehand":     SelectVideoAreaMode(VideoAreaMode.Freehand, showSubMenu: false); break;
                         case "FullScreen":   SelectVideoAreaMode(VideoAreaMode.FullScreen, showSubMenu: false); break;
-                        case "FixedRegion":  SelectVideoAreaMode(VideoAreaMode.FixedRegion, showSubMenu: false); break;
                     }
                 }
             }
@@ -2329,8 +2305,7 @@ namespace GraphicarrayCapture
             CloseGuidelineOverlay();
             if (!_cfg.ShowOuterGuideline) return;
             if (_cfg.ActiveAreaMode == VideoAreaMode.Rectangle ||
-                _cfg.ActiveAreaMode == VideoAreaMode.Freehand ||
-                _cfg.ActiveAreaMode == VideoAreaMode.FixedRegion)
+                _cfg.ActiveAreaMode == VideoAreaMode.Freehand)
             {
                 _guidelineOverlay = new RecordingGuidelineOverlayForm(_selectedVideoBounds, _selectedFreehandPolygon);
                 _guidelineOverlay.Show();
@@ -2357,10 +2332,11 @@ namespace GraphicarrayCapture
             }
         }
 
-        // Handles clicking any of the 5 Video Modes (including Rectangle & Fixed Region sub-options)
+        // Handles clicking any of the 4 Video Modes (Rectangle shows its sub-option dropdown)
         private void SelectVideoAreaMode(VideoAreaMode mode, bool showSubMenu, Point menuPt = default)
         {
             _cfg.ActiveAreaMode = mode;
+            _showRectDropdown = (mode == VideoAreaMode.Rectangle);
             _selectedFreehandPolygon = null;
 
             if (mode == VideoAreaMode.FullScreen)
@@ -2384,13 +2360,8 @@ namespace GraphicarrayCapture
 
             if (showSubMenu && mode == VideoAreaMode.Rectangle)
             {
+                Invalidate(); // reveal the Rectangle dropdown pill right away
                 OpenRectangleOptionsDropdown(menuPt);
-                return;
-            }
-
-            if (showSubMenu && mode == VideoAreaMode.FixedRegion)
-            {
-                OpenFixedRegionOptionsDropdown(menuPt);
                 return;
             }
 
@@ -2449,37 +2420,6 @@ namespace GraphicarrayCapture
             menu.Show(this, screenOrClientPt);
         }
 
-        private void OpenFixedRegionOptionsDropdown(Point screenOrClientPt)
-        {
-            ContextMenuStrip menu = new ContextMenuStrip { Renderer = _menuRenderer };
-            menu.Items.Add($"Option 1: Input Pixel Dimensions ({_cfg.FixedRegionWidth}×{_cfg.FixedRegionHeight} px)...", null, (s, e) =>
-            {
-                if (PromptTwoIntegers("Fixed Region — Pixel Dimensions", "Width in Pixels (px):", "Height in Pixels (px):",
-                    _cfg.FixedRegionWidth, _cfg.FixedRegionHeight, out int pw, out int ph))
-                {
-                    _cfg.FixedSubMode = FixedRegionSubMode.PixelDimensions;
-                    _cfg.FixedRegionWidth = Math.Max(32, pw & ~1);
-                    _cfg.FixedRegionHeight = Math.Max(32, ph & ~1);
-                    StorageEngine.Save(_cfg);
-                    RunInteractiveVideoRegionPicker();
-                }
-            });
-            menu.Items.Add($"Option 2: Input Custom Ratio ({_cfg.AspectRatioW}:{_cfg.AspectRatioH})...", null, (s, e) =>
-            {
-                if (PromptTwoIntegers("Fixed Region — Custom Aspect Ratio", "Ratio Width (W):", "Ratio Height (H):",
-                    _cfg.AspectRatioW, _cfg.AspectRatioH, out int rw, out int rh))
-                {
-                    _cfg.FixedSubMode = FixedRegionSubMode.CustomRatio;
-                    _cfg.AspectRatioW = Math.Max(1, rw);
-                    _cfg.AspectRatioH = Math.Max(1, rh);
-                    _cfg.FixedRegionHeight = Math.Max(32, ((_cfg.FixedRegionWidth * _cfg.AspectRatioH) / _cfg.AspectRatioW) & ~1);
-                    StorageEngine.Save(_cfg);
-                    RunInteractiveVideoRegionPicker();
-                }
-            });
-            menu.Show(this, screenOrClientPt);
-        }
-
         private void RunInteractiveVideoRegionPicker()
         {
             Hide();
@@ -2488,10 +2428,9 @@ namespace GraphicarrayCapture
             {
                 bool lockRatio = _cfg.ActiveAreaMode == VideoAreaMode.Rectangle &&
                                  _cfg.RectangleSubMode == RectangleSelectionSubMode.CustomRatio;
-                Size fixedSz = new Size(_cfg.FixedRegionWidth, _cfg.FixedRegionHeight);
 
                 using (VideoAreaSelectorForm ov = new VideoAreaSelectorForm(
-                    _cfg.ActiveAreaMode, lockRatio, _cfg.AspectRatioW, _cfg.AspectRatioH, fixedSz))
+                    _cfg.ActiveAreaMode, lockRatio, _cfg.AspectRatioW, _cfg.AspectRatioH))
                 {
                     if (ov.ShowDialog(this) == DialogResult.OK)
                     {
@@ -2796,7 +2735,7 @@ namespace GraphicarrayCapture
                 return;
             }
 
-            // 5 Video Recording Modes
+            // 4 Video Recording Modes
             for (int i = 0; i < _modeRects.Length; i++)
             {
                 if (_modeRects[i].Contains(pt))
@@ -2806,14 +2745,10 @@ namespace GraphicarrayCapture
                 }
             }
 
-            // Area Sub-Option Dropdown (Free vs Custom Ratio for Rectangle; Pixel Dimensions vs Custom Ratio for Fixed)
-            if (_rectAreaSubOptionDropdown.Contains(pt))
+            // Rectangle Sub-Option Dropdown (Free vs Custom Ratio) - only exists while Rectangle mode is active
+            if (_showRectDropdown && _rectAreaSubOptionDropdown.Contains(pt))
             {
-                Point dp = new Point((int)_rectAreaSubOptionDropdown.Left, (int)_rectAreaSubOptionDropdown.Bottom);
-                if (_cfg.ActiveAreaMode == VideoAreaMode.FixedRegion)
-                    OpenFixedRegionOptionsDropdown(dp);
-                else
-                    OpenRectangleOptionsDropdown(dp);
+                OpenRectangleOptionsDropdown(new Point((int)_rectAreaSubOptionDropdown.Left, (int)_rectAreaSubOptionDropdown.Bottom));
                 return;
             }
 
@@ -2897,7 +2832,7 @@ namespace GraphicarrayCapture
                 g.FillEllipse(statusDot, dotRect);
             }
 
-            // ── 2. MAIN VIDEO STUDIO CARD: Timer + 5 Pure Video Modes + Sub-Mode Dropdown
+            // ── 2. MAIN VIDEO STUDIO CARD: Timer + 4 Pure Video Modes + Rectangle Sub-Mode Dropdown
             float y = 68f;
             RectangleF mainCard = new RectangleF(pad, y, w - pad * 2, 198f);
             using (GraphicsPath cardPath = GaBrand.RoundedRect(mainCard, GaBrand.RadiusCard))
@@ -2914,21 +2849,27 @@ namespace GraphicarrayCapture
             using (SolidBrush textB = new SolidBrush(GaBrand.Text))
             using (SolidBrush cyanB = new SolidBrush(GaBrand.Cyan))
             {
-                g.DrawString("VIDEO RECORDING AREA (5 MODES + OUTER GUIDELINE)", labelF, slateB, mainCard.X + 16f, mainCard.Y + 12f);
+                g.DrawString("VIDEO RECORDING AREA (4 MODES + OUTER GUIDELINE)", labelF, slateB, mainCard.X + 16f, mainCard.Y + 12f);
                 string timeStr = isRec ? _recorder.Elapsed.ToString(@"hh\:mm\:ss") : "00:00:00";
                 g.DrawString(timeStr, timerF, isRec ? cyanB : textB, mainCard.X + 16f, mainCard.Y + 30f);
 
-                // Area Sub-Option Dropdown (shows Free vs Custom Ratio for Rectangle, or Pixel vs Ratio for Fixed)
-                string subLabel = GetAreaSubOptionLabel();
-                _rectAreaSubOptionDropdown = new RectangleF(mainCard.Right - 196f, mainCard.Y + 30f, 180f, 28f);
-                DrawDropdownPill(g, _rectAreaSubOptionDropdown, subLabel);
+                // Rectangle Sub-Option Dropdown (Free vs Custom Ratio) - drawn ONLY after the Rectangle button is clicked
+                if (_showRectDropdown)
+                {
+                    _rectAreaSubOptionDropdown = new RectangleF(mainCard.Right - 196f, mainCard.Y + 30f, 180f, 28f);
+                    DrawDropdownPill(g, _rectAreaSubOptionDropdown, GetAreaSubOptionLabel());
+                }
+                else
+                {
+                    _rectAreaSubOptionDropdown = RectangleF.Empty;
+                }
             }
 
-            // 5 Video Mode Buttons in one clean row
+            // 4 Video Mode Buttons in one clean row
             float gridTop = mainCard.Y + 72f;
-            float cellW = (mainCard.Width - 32f - 32f) / 5f;
+            float cellW = (mainCard.Width - 32f - 24f) / 4f;
             float cellH = 108f;
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < _modeRects.Length; i++)
             {
                 RectangleF cell = new RectangleF(
                     mainCard.X + 16f + i * (cellW + 8f),
@@ -3071,19 +3012,9 @@ namespace GraphicarrayCapture
 
         private string GetAreaSubOptionLabel()
         {
-            if (_cfg.ActiveAreaMode == VideoAreaMode.Rectangle)
-            {
-                return _cfg.RectangleSubMode == RectangleSelectionSubMode.FreeArea
-                    ? "Rect: Free Area ▾"
-                    : $"Rect: Ratio {_cfg.AspectRatioW}:{_cfg.AspectRatioH} ▾";
-            }
-            if (_cfg.ActiveAreaMode == VideoAreaMode.FixedRegion)
-            {
-                return _cfg.FixedSubMode == FixedRegionSubMode.PixelDimensions
-                    ? $"Fixed: {_cfg.FixedRegionWidth}×{_cfg.FixedRegionHeight}px ▾"
-                    : $"Fixed: Ratio {_cfg.AspectRatioW}:{_cfg.AspectRatioH} ▾";
-            }
-            return $"{_cfg.ActiveAreaMode} Options ▾";
+            return _cfg.RectangleSubMode == RectangleSelectionSubMode.FreeArea
+                ? "Rect: Free Area ▾"
+                : $"Rect: Ratio {_cfg.AspectRatioW}:{_cfg.AspectRatioH} ▾";
         }
 
         private void ResetControlHitRects()
@@ -3235,9 +3166,6 @@ namespace GraphicarrayCapture
                     case 3: // Full Screen
                         g.DrawRectangle(p, r.X, r.Y, r.Width, r.Height);
                         g.DrawLine(p, r.X + 4, r.Y + 4, r.Right - 4, r.Bottom - 4);
-                        break;
-                    case 4: // Fixed Region (Pixel / Ratio)
-                        g.DrawRectangle(p, center.X - 7, center.Y - 6, 14, 12);
                         break;
                 }
             }
