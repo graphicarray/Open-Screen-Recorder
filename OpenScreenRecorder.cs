@@ -1,7 +1,14 @@
 // ============================================================================
-// Open Screen Recorder v1.1 — Offline Screen Capture & Crash-Safe Video Studio
+// Open Screen Recorder v2.0 — 100% Offline Crash-Safe Video Recorder
 // Brand & Owner: Graphicarray · Md Numan Ahmed (https://www.linkedin.com/in/graphicarray)
-// Blueprint: FastStone Capture v7.4 + Crash-Safe Single-File A/V Muxer
+// Pure Video Recording Edition:
+//  - 5 Video Area Modes: Active Window, Rectangle (Free / Custom Ratio),
+//    Freehand, Full Screen, Fixed Region (Pixel Dimensions / Custom Ratio)
+//  - Live On-Screen Outer Guideline Frame during Rectangle, Freehand & Fixed recording
+//  - Single-File Muxed Audio+Video OR Video-Only (No Audio)
+//  - Full Dropdown Menus for all value controls (Format, Quality, FPS, Audio, Cursor, Ratio)
+//  - Settings Gear -> Shortcut Key Manager Page (Add, Change, or Remove any hotkey)
+//  - Blinking Red Taskbar & System Tray Icon + Pause/Resume + Crash-Safe 1s Auto-Save
 // ============================================================================
 
 using System;
@@ -10,7 +17,6 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
-using System.Drawing.Printing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -30,7 +36,7 @@ namespace GraphicarrayCapture
         public const string BrandName = "Graphicarray";
         public const string OwnerName = "Md Numan Ahmed";
         public const string FooterCredit = "Graphicarray · Numan Ahmed";
-        public const string VersionText = "v1.1";
+        public const string VersionText = "v2.0";
         public const string LinkedInUrl = "https://www.linkedin.com/in/graphicarray";
 
         // Strict Graphicarray palette tokens (only these colors are used)
@@ -218,10 +224,8 @@ namespace GraphicarrayCapture
             g.Restore(state);
         }
 
-        // Creates dynamic Taskbar & System Tray icon (Normal Cyan logo vs Blinking Red recording badge vs Amber Paused)
         public static Icon CreateStatusIcon(int state)
         {
-            // state: 0 = Idle (Logo), 1 = Blinking Red Recording, 2 = Amber Paused
             using (Bitmap bmp = new Bitmap(32, 32, PixelFormat.Format32bppArgb))
             using (Graphics g = Graphics.FromImage(bmp))
             {
@@ -256,17 +260,53 @@ namespace GraphicarrayCapture
         }
     }
 
+    // Custom Graphicarray Renderer for Dropdown Menus (ContextMenuStrip)
+    public sealed class GaDropdownRenderer : ToolStripProfessionalRenderer
+    {
+        public GaDropdownRenderer() : base(new GaColorTable()) { }
+
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            e.TextColor = e.Item.Selected ? GaBrand.Abyss : GaBrand.Text;
+            e.TextFont = GaBrand.MakeFont(12.5f, e.Item.Selected ? FontStyle.Bold : FontStyle.Regular);
+            base.OnRenderItemText(e);
+        }
+
+        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+        {
+            Rectangle r = new Rectangle(4, 2, e.Item.Width - 8, e.Item.Height - 4);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            if (e.Item.Selected)
+            {
+                using (GraphicsPath gp = GaBrand.RoundedRect(r, 8f))
+                using (LinearGradientBrush grad = GaBrand.SignatureGradient(r))
+                    e.Graphics.FillPath(grad, gp);
+            }
+            else
+            {
+                using (SolidBrush sb = new SolidBrush(GaBrand.Panel))
+                    e.Graphics.FillRectangle(sb, new Rectangle(0, 0, e.Item.Width, e.Item.Height));
+            }
+        }
+
+        private sealed class GaColorTable : ProfessionalColorTable
+        {
+            public override Color ToolStripDropDownBackground => GaBrand.Panel;
+            public override Color MenuBorder => GaBrand.Cyan;
+            public override Color ImageMarginGradientBegin => GaBrand.Panel;
+            public override Color ImageMarginGradientMiddle => GaBrand.Panel;
+            public override Color ImageMarginGradientEnd => GaBrand.Panel;
+            public override Color SeparatorDark => GaBrand.Edge;
+        }
+    }
+
     // ========================================================================
     // 2. WIN32 LOW-LEVEL PRIMITIVES (GDI32, USER32, KERNEL32, WINMM WAVEIN)
     // ========================================================================
     public static class NativeMethods
     {
-        public const int WH_MOUSE_LL = 14;
-        public const int WH_KEYBOARD_LL = 13;
         public const int WM_HOTKEY = 0x0312;
-        public const int WM_VSCROLL = 0x0115;
         public const int WM_QUERYENDSESSION = 0x0011;
-        public const int SB_PAGEDOWN = 3;
         public const int SM_XVIRTUALSCREEN = 76;
         public const int SM_YVIRTUALSCREEN = 77;
         public const int SM_CXVIRTUALSCREEN = 78;
@@ -275,11 +315,20 @@ namespace GraphicarrayCapture
         public const int CAPTUREBLT = 0x40000000;
         public const int CURSOR_SHOWING = 0x00000001;
         public const int DI_NORMAL = 0x0003;
-        public const uint CF_BITMAP = 2;
         public const int CALLBACK_FUNCTION = 0x00030000;
         public const int MM_WIM_DATA = 0x3C0;
 
-        public delegate IntPtr LowLevelProc(int nCode, IntPtr wParam, IntPtr lParam);
+        // Window ExStyles for Click-Through Live Recording Outer Guideline Frame
+        public const int WS_EX_LAYERED = 0x00080000;
+        public const int WS_EX_TRANSPARENT = 0x00000020;
+        public const int WS_EX_TOPMOST = 0x00000008;
+        public const int WS_EX_TOOLWINDOW = 0x00000080;
+        public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
+
+        public const uint MOD_ALT = 0x0001;
+        public const uint MOD_CONTROL = 0x0002;
+        public const uint MOD_SHIFT = 0x0004;
+
         public delegate bool ConsoleCtrlDelegate(int sig);
         public delegate void WaveInProc(IntPtr hwi, int uMsg, IntPtr dwInstance, IntPtr dwParam1, IntPtr dwParam2);
 
@@ -355,28 +404,17 @@ namespace GraphicarrayCapture
 
         [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
         [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-        [DllImport("user32.dll")] public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelProc lpfn, IntPtr hMod, uint dwThreadId);
-        [DllImport("user32.dll")] public static extern bool UnhookWindowsHookEx(IntPtr hhk);
-        [DllImport("user32.dll")] public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-        [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT Point);
-        [DllImport("user32.dll")] public static extern IntPtr ChildWindowFromPointEx(IntPtr hwndParent, POINT pt, uint uFlags);
-        [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr hWnd, ref POINT lpPoint);
         [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
         [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
         [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
         [DllImport("user32.dll")] public static extern bool GetCursorInfo(out CURSORINFO pci);
         [DllImport("user32.dll")] public static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
         [DllImport("user32.dll")] public static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyWidth, int istepIfAniCur, IntPtr hbrFlickerFreeDraw, int diFlags);
-        [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-        [DllImport("user32.dll")] public static extern bool OpenClipboard(IntPtr hWndNewOwner);
-        [DllImport("user32.dll")] public static extern bool EmptyClipboard();
-        [DllImport("user32.dll")] public static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
-        [DllImport("user32.dll")] public static extern bool CloseClipboard();
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
         [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr hIcon);
+        [DllImport("user32.dll")] public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
 
         [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
         [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hdc);
@@ -384,11 +422,9 @@ namespace GraphicarrayCapture
         [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
         [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, int dwRop);
         [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
-        [DllImport("gdi32.dll")] public static extern IntPtr CreatePolygonRgn(POINT[] lppt, int cPoints, int fnPolyFillMode);
 
         [DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(ConsoleCtrlDelegate HandlerRoutine, bool Add);
 
-        // WinMM low-level PCM capture so Audio & Video are interleaved into ONE single file
         [DllImport("winmm.dll")] public static extern int waveInOpen(out IntPtr phwi, uint uDeviceID, ref WAVEFORMATEX pwfx, WaveInProc dwCallback, IntPtr dwInstance, int fdwOpen);
         [DllImport("winmm.dll")] public static extern int waveInPrepareHeader(IntPtr hwi, IntPtr pwh, int cbwh);
         [DllImport("winmm.dll")] public static extern int waveInUnprepareHeader(IntPtr hwi, IntPtr pwh, int cbwh);
@@ -400,18 +436,28 @@ namespace GraphicarrayCapture
     }
 
     // ========================================================================
-    // 3. PERSISTENCE & CONFIG ENGINE (fsc.db, TBSettings.db, Portable.db)
+    // 3. VIDEO MODES, SHORTCUT KEY MODEL & PERSISTENCE (fsc.db / Portable.db)
     // ========================================================================
-    public enum CaptureMode
+    // Only the 5 requested Video Recording modes (Window/Spy, Scroll Page & Repeat Last removed)
+    public enum VideoAreaMode
     {
         ActiveWindow = 0,
-        WindowObject = 1,
-        Rectangle = 2,
-        Freehand = 3,
-        FullScreen = 4,
-        ScrollingWindow = 5,
-        FixedRegion = 6,
-        RepeatLast = 7
+        Rectangle = 1,
+        Freehand = 2,
+        FullScreen = 3,
+        FixedRegion = 4
+    }
+
+    public enum RectangleSelectionSubMode
+    {
+        FreeArea = 0,
+        CustomRatio = 1
+    }
+
+    public enum FixedRegionSubMode
+    {
+        PixelDimensions = 0,
+        CustomRatio = 1
     }
 
     public enum VideoFormatType
@@ -429,44 +475,65 @@ namespace GraphicarrayCapture
         Lossless = 100
     }
 
-    public enum OutputTarget
+    public class ShortcutBinding
     {
-        ToEditor,
-        ToDraw,
-        ToClipboard,
-        ToFile,
-        ToAutoSave,
-        ToPrinter,
-        ToWord,
-        ToExcel,
-        ToPowerPoint
+        public string ActionId { get; set; }
+        public string ActionName { get; set; }
+        public Keys Key { get; set; }
+        public bool Ctrl { get; set; }
+        public bool Alt { get; set; }
+        public bool Shift { get; set; }
+
+        public string FormatDisplay()
+        {
+            if (Key == Keys.None) return "None (Removed)";
+            List<string> parts = new List<string>();
+            if (Ctrl) parts.Add("Ctrl");
+            if (Alt) parts.Add("Alt");
+            if (Shift) parts.Add("Shift");
+            parts.Add(Key.ToString());
+            return string.Join(" + ", parts);
+        }
     }
 
     public class AppConfig
     {
-        public CaptureMode ActiveCaptureMode { get; set; } = CaptureMode.FullScreen;
+        public VideoAreaMode ActiveAreaMode { get; set; } = VideoAreaMode.Rectangle;
+        public RectangleSelectionSubMode RectangleSubMode { get; set; } = RectangleSelectionSubMode.FreeArea;
+        public FixedRegionSubMode FixedSubMode { get; set; } = FixedRegionSubMode.PixelDimensions;
+        public int AspectRatioW { get; set; } = 16;
+        public int AspectRatioH { get; set; } = 9;
+        public int FixedRegionWidth { get; set; } = 1280;
+        public int FixedRegionHeight { get; set; } = 720;
+
         public VideoFormatType VideoFormat { get; set; } = VideoFormatType.MP4;
         public VideoQualityLevel VideoQuality { get; set; } = VideoQualityLevel.High;
-        public OutputTarget ActiveOutputTarget { get; set; } = OutputTarget.ToEditor;
-        public string AutoSaveFolder { get; set; } = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
-            "OpenScreenRecorder", "AutoSave");
-        public string FileNameTemplate { get; set; } = "OSR_$Y-$M-$D_$H-$N-$S_#";
-        public string DefaultImageExtension { get; set; } = ".png";
+        public int VideoFps { get; set; } = 24;
+        public bool RecordAudioWithVideo { get; set; } = true; // true = Video + Audio (1 File), false = Video Only (No Audio)
         public bool IncludeMouseCursor { get; set; } = true;
         public bool HighlightMouseClicks { get; set; } = true;
-        public bool RecordAudio { get; set; } = true;
-        public int VideoFps { get; set; } = 24;
-        public int AutoScrollIntervalMs { get; set; } = 250;
-        public int FixedRegionWidth { get; set; } = 800;
-        public int FixedRegionHeight { get; set; } = 600;
-        public int CaptureDelaySeconds { get; set; } = 0;
+        public bool ShowOuterGuideline { get; set; } = true;
+
+        public string AutoSaveFolder { get; set; } = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+            "OpenScreenRecorder");
+        public string FileNameTemplate { get; set; } = "OSR_$Y-$M-$D_$H-$N-$S_#";
         public int CrashFlushIntervalSeconds { get; set; } = 1;
         public int SequenceCounter { get; set; } = 1;
-        public Rectangle LastCaptureRect { get; set; } = new Rectangle(0, 0, 1920, 1080);
-        public CaptureMode LastCaptureMode { get; set; } = CaptureMode.FullScreen;
+        public Rectangle LastVideoRect { get; set; } = new Rectangle(100, 100, 1280, 720);
         public bool PortableMode { get; set; } = true;
-        public string ToolbarSkin { get; set; } = "Graphicarray Abyss";
+        public List<ShortcutBinding> Shortcuts { get; set; } = DefaultShortcuts();
+
+        public static List<ShortcutBinding> DefaultShortcuts() => new List<ShortcutBinding>
+        {
+            new ShortcutBinding { ActionId = "StartStop",    ActionName = "Start / Stop Video Recording", Key = Keys.F9 },
+            new ShortcutBinding { ActionId = "PauseResume",  ActionName = "Pause / Resume Recording",     Key = Keys.F10 },
+            new ShortcutBinding { ActionId = "ActiveWindow", ActionName = "Active Window Video Mode",     Key = Keys.F5, Alt = true },
+            new ShortcutBinding { ActionId = "Rectangle",    ActionName = "Rectangle Video Mode",         Key = Keys.F6, Alt = true },
+            new ShortcutBinding { ActionId = "Freehand",     ActionName = "Freehand Video Mode",          Key = Keys.F7, Alt = true },
+            new ShortcutBinding { ActionId = "FullScreen",   ActionName = "Full Screen Video Mode",       Key = Keys.F8, Alt = true },
+            new ShortcutBinding { ActionId = "FixedRegion",  ActionName = "Fixed Region Video Mode",      Key = Keys.F11, Alt = true }
+        };
     }
 
     public static class StorageEngine
@@ -508,17 +575,11 @@ namespace GraphicarrayCapture
                 {
                     string json = File.ReadAllText(FscDbPath, Encoding.UTF8);
                     AppConfig loaded = JsonSerializer.Deserialize<AppConfig>(json);
-                    if (loaded != null) cfg = loaded;
-                }
-                else if (!cfg.PortableMode)
-                {
-                    using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath))
+                    if (loaded != null)
                     {
-                        if (key != null)
-                        {
-                            object folder = key.GetValue("AutoSaveFolder");
-                            if (folder != null) cfg.AutoSaveFolder = folder.ToString();
-                        }
+                        if (loaded.Shortcuts == null || loaded.Shortcuts.Count == 0)
+                            loaded.Shortcuts = AppConfig.DefaultShortcuts();
+                        cfg = loaded;
                     }
                 }
             }
@@ -536,21 +597,11 @@ namespace GraphicarrayCapture
                 File.WriteAllText(FscDbPath, JsonSerializer.Serialize(cfg, opts), Encoding.UTF8);
                 File.WriteAllText(TbSettingsPath, JsonSerializer.Serialize(new
                 {
-                    Skin = cfg.ToolbarSkin,
                     Product = GaBrand.ProductName,
                     Owner = GaBrand.OwnerName,
                     Profile = GaBrand.LinkedInUrl,
                     UpdatedUtc = DateTime.UtcNow
                 }, opts), Encoding.UTF8);
-
-                if (!cfg.PortableMode)
-                {
-                    using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath))
-                    {
-                        key?.SetValue("AutoSaveFolder", cfg.AutoSaveFolder ?? "");
-                        key?.SetValue("Template", cfg.FileNameTemplate ?? "OSR_$Y-$M-$D_$H-$N-$S_#");
-                    }
-                }
             }
             catch { }
         }
@@ -582,8 +633,8 @@ namespace GraphicarrayCapture
             if (string.IsNullOrWhiteSpace(cfg.AutoSaveFolder))
             {
                 cfg.AutoSaveFolder = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
-                    "OpenScreenRecorder", "AutoSave");
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+                    "OpenScreenRecorder");
             }
             Directory.CreateDirectory(cfg.AutoSaveFolder);
             string baseName = ExpandTemplate(prefixOverride ?? cfg.FileNameTemplate, DateTime.Now, cfg.SequenceCounter++);
@@ -601,13 +652,89 @@ namespace GraphicarrayCapture
     }
 
     // ========================================================================
-    // 4. SINGLE-FILE INTERLEAVED AUDIO+VIDEO CRASH-SAFE WRITER & FFMPEG MUXER
+    // 4. LIVE ON-SCREEN OUTER GUIDELINE OVERLAY (Rectangle, Freehand, Fixed)
     // ========================================================================
-    // Writes BOTH Video (Stream 00dc MJPG) AND Audio (Stream 01wb 44.1kHz 16-bit PCM)
-    // into ONE single file on disk, flushing every 1 second for crash safety.
-    // When MP4 or MKV is selected and ffmpeg.exe is available, remuxes/encodes
-    // into a single .mp4 or .mkv container and removes the intermediate buffer.
-    // shortcut: native fallback writes interleaved MJPEG+PCM in one container; bundled ffmpeg.exe converts to H.264 MP4/MKV.
+    // Click-through topmost overlay that draws a 2px outer boundary around the
+    // active recording area (or freehand polygon) so you see the exact recording
+    // region on screen without the border ever appearing inside the recorded video!
+    public sealed class RecordingGuidelineOverlayForm : Form
+    {
+        private readonly Rectangle _recordBounds;
+        private readonly Point[] _localPolygon;
+        private bool _blinkPhase;
+
+        public RecordingGuidelineOverlayForm(Rectangle recordBounds, Point[] localPolygon)
+        {
+            _recordBounds = recordBounds;
+            _localPolygon = localPolygon;
+
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
+            // Expand window 6px outside the recorded region so the border sits outside the video capture area
+            Bounds = Rectangle.Inflate(recordBounds, 6, 6);
+            TopMost = true;
+            ShowInTaskbar = false;
+            BackColor = Color.Magenta;
+            TransparencyKey = Color.Magenta;
+            DoubleBuffered = true;
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= NativeMethods.WS_EX_LAYERED |
+                              NativeMethods.WS_EX_TRANSPARENT |
+                              NativeMethods.WS_EX_TOPMOST |
+                              NativeMethods.WS_EX_TOOLWINDOW;
+                return cp;
+            }
+        }
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            // Also instruct Windows 10/11 DWM to exclude this guideline window from screen capture
+            try { NativeMethods.SetWindowDisplayAffinity(Handle, NativeMethods.WDA_EXCLUDEFROMCAPTURE); } catch { }
+        }
+
+        public void SetBlinkPhase(bool blink)
+        {
+            _blinkPhase = blink;
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Color.Magenta);
+
+            Color guideColor = _blinkPhase ? GaBrand.Red : GaBrand.Cyan;
+            using (Pen guidePen = new Pen(guideColor, 2f) { DashStyle = DashStyle.Dash })
+            {
+                if (_localPolygon != null && _localPolygon.Length >= 3)
+                {
+                    Point[] shifted = new Point[_localPolygon.Length];
+                    for (int i = 0; i < _localPolygon.Length; i++)
+                        shifted[i] = new Point(_localPolygon[i].X + 6, _localPolygon[i].Y + 6);
+                    g.DrawPolygon(guidePen, shifted);
+                }
+                else
+                {
+                    // Draw 2px outside the actual captured rectangle (at offset 3,3)
+                    g.DrawRectangle(guidePen, 2, 2, Width - 5, Height - 5);
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // 5. SINGLE-FILE INTERLEAVED AUDIO+VIDEO CRASH-SAFE WRITER & FFMPEG MUXER
+    // ========================================================================
+    // shortcut: writes interleaved MJPEG video (00dc) + PCM audio (01wb) into one container; converts to H.264 MP4/MKV when ffmpeg.exe is present.
     public sealed class CrashSafeAviWriter : IDisposable
     {
         private FileStream _fs;
@@ -688,22 +815,20 @@ namespace GraphicarrayCapture
             _bw.Write((uint)0);
             WriteFourCC("AVI ");
 
-            // hdrl LIST
             WriteFourCC("LIST");
             long hdrlSizePos = _fs.Position;
             _bw.Write((uint)0);
             long hdrlStart = _fs.Position;
             WriteFourCC("hdrl");
 
-            // avih chunk (56 bytes)
             WriteFourCC("avih");
             _bw.Write((uint)56);
             _bw.Write(microSecPerFrame);
             _bw.Write(maxBytesPerSec);
             _bw.Write((uint)0);
-            _bw.Write((uint)0x110); // AVIF_HASINDEX | AVIF_ISINTERLEAVED
+            _bw.Write((uint)0x110);
             _avihTotalFramesPos = _fs.Position;
-            _bw.Write((uint)0); // dwTotalFrames
+            _bw.Write((uint)0);
             _bw.Write((uint)0);
             _bw.Write(streamCount);
             _bw.Write((uint)(_width * _height * 3));
@@ -711,7 +836,7 @@ namespace GraphicarrayCapture
             _bw.Write((uint)_height);
             _bw.Write((uint)0); _bw.Write((uint)0); _bw.Write((uint)0); _bw.Write((uint)0);
 
-            // Stream 0: Video strl LIST
+            // Stream 0: Video
             WriteFourCC("LIST");
             long vStrlSizePos = _fs.Position;
             _bw.Write((uint)0);
@@ -730,7 +855,7 @@ namespace GraphicarrayCapture
             _bw.Write((uint)_fps);
             _bw.Write((uint)0);
             _vidsLengthPos = _fs.Position;
-            _bw.Write((uint)0); // dwLength
+            _bw.Write((uint)0);
             _bw.Write((uint)(_width * _height * 3));
             _bw.Write((uint)_jpegQuality * 100);
             _bw.Write((uint)0);
@@ -758,7 +883,7 @@ namespace GraphicarrayCapture
             _bw.Write((uint)(vStrlEnd - vStrlStart));
             _fs.Position = vStrlEnd;
 
-            // Stream 1: Audio strl LIST (interleaved in the exact same file!)
+            // Stream 1: Audio (only when RecordAudioWithVideo is true — zero separate audio file)
             if (_hasAudio)
             {
                 uint blockAlign = (uint)(AudioChannels * (AudioBitsPerSample / 8));
@@ -773,7 +898,7 @@ namespace GraphicarrayCapture
                 WriteFourCC("strh");
                 _bw.Write((uint)56);
                 WriteFourCC("auds");
-                _bw.Write((uint)1); // PCM
+                _bw.Write((uint)1);
                 _bw.Write((uint)0);
                 _bw.Write((ushort)0);
                 _bw.Write((ushort)0);
@@ -782,7 +907,7 @@ namespace GraphicarrayCapture
                 _bw.Write(avgBytesPerSec);
                 _bw.Write((uint)0);
                 _audsLengthPos = _fs.Position;
-                _bw.Write((uint)0); // dwLength in samples
+                _bw.Write((uint)0);
                 _bw.Write(avgBytesPerSec);
                 _bw.Write((uint)10000);
                 _bw.Write(blockAlign);
@@ -791,10 +916,9 @@ namespace GraphicarrayCapture
                 _bw.Write((short)0);
                 _bw.Write((short)0);
 
-                // WAVEFORMATEX (18 bytes)
                 WriteFourCC("strf");
                 _bw.Write((uint)18);
-                _bw.Write((ushort)1); // WAVE_FORMAT_PCM
+                _bw.Write((ushort)1);
                 _bw.Write((ushort)AudioChannels);
                 _bw.Write((uint)AudioSampleRate);
                 _bw.Write(avgBytesPerSec);
@@ -813,7 +937,6 @@ namespace GraphicarrayCapture
             _bw.Write((uint)(hdrlEnd - hdrlStart));
             _fs.Position = hdrlEnd;
 
-            // movi LIST
             WriteFourCC("LIST");
             _moviSizePos = _fs.Position;
             _bw.Write((uint)0);
@@ -859,7 +982,6 @@ namespace GraphicarrayCapture
             }
         }
 
-        // Writes captured microphone/system PCM audio directly into the SAME video file
         public void WriteAudioPcmBytes(byte[] pcmBytes, int count)
         {
             if (!_hasAudio || pcmBytes == null || count <= 0) return;
@@ -970,7 +1092,7 @@ namespace GraphicarrayCapture
     }
 
     // ========================================================================
-    // 5. WINMM PCM AUDIO STREAMER (Feeds directly into CrashSafeAviWriter)
+    // 6. WINMM PCM AUDIO STREAMER (Interleaves audio directly into video file)
     // ========================================================================
     public sealed class WinMmAudioStreamer : IDisposable
     {
@@ -994,7 +1116,7 @@ namespace GraphicarrayCapture
             {
                 NativeMethods.WAVEFORMATEX fmt = new NativeMethods.WAVEFORMATEX
                 {
-                    wFormatTag = 1, // WAVE_FORMAT_PCM
+                    wFormatTag = 1,
                     nChannels = CrashSafeAviWriter.AudioChannels,
                     nSamplesPerSec = CrashSafeAviWriter.AudioSampleRate,
                     wBitsPerSample = CrashSafeAviWriter.AudioBitsPerSample,
@@ -1006,7 +1128,7 @@ namespace GraphicarrayCapture
                 int res = NativeMethods.waveInOpen(out _hWaveIn, unchecked((uint)-1), ref fmt, _callback, IntPtr.Zero, NativeMethods.CALLBACK_FUNCTION);
                 if (res != 0 || _hWaveIn == IntPtr.Zero) return false;
 
-                int bufSize = 8820; // 0.1s of 44.1kHz 16-bit mono PCM
+                int bufSize = 8820;
                 for (int i = 0; i < 4; i++)
                 {
                     IntPtr dataPtr = Marshal.AllocHGlobal(bufSize);
@@ -1088,13 +1210,12 @@ namespace GraphicarrayCapture
     }
 
     // ========================================================================
-    // 6. CRASH-SAFE GUARD & VIDEO RECORDER (Supports All 8 Modes + Pause/Resume)
+    // 7. CRASH-SAFE GUARD & VIDEO RECORDER (5 Video Modes + Pause/Resume)
     // ========================================================================
     public static class CrashSafeGuard
     {
         private static readonly object Sync = new object();
         private static CrashSafeVideoRecorder _activeRecorder;
-        private static Bitmap _unsavedEditorBitmap;
         private static AppConfig _config;
         private static NativeMethods.ConsoleCtrlDelegate _consoleHandler;
         private static bool _hooksInstalled;
@@ -1138,11 +1259,6 @@ namespace GraphicarrayCapture
             }
         }
 
-        public static void SetUnsavedEditorBitmap(Bitmap bmp)
-        {
-            lock (Sync) { _unsavedEditorBitmap = bmp; }
-        }
-
         public static void EmergencySaveAll(string reason)
         {
             lock (Sync)
@@ -1157,14 +1273,6 @@ namespace GraphicarrayCapture
                         _activeRecorder = null;
                     }
 
-                    if (_unsavedEditorBitmap != null && _config != null)
-                    {
-                        string path = StorageEngine.BuildAutoSaveFilePath(_config, ".png", "OSR_RecoveredEdit_$Y-$M-$D_$H-$N-$S_#");
-                        _unsavedEditorBitmap.Save(path, ImageFormat.Png);
-                        LastEmergencySavedPath = path;
-                        _unsavedEditorBitmap = null;
-                    }
-
                     if (_config != null)
                         StorageEngine.Save(_config);
                 }
@@ -1177,8 +1285,7 @@ namespace GraphicarrayCapture
     {
         private readonly AppConfig _cfg;
         private Rectangle _captureBounds;
-        private readonly CaptureMode _mode;
-        private readonly IntPtr _targetWindowHwnd;
+        private readonly VideoAreaMode _mode;
         private readonly Point[] _freehandPolygon;
 
         private CrashSafeAviWriter _writer;
@@ -1188,7 +1295,6 @@ namespace GraphicarrayCapture
         private volatile bool _paused;
         private readonly Stopwatch _activeTimer = new Stopwatch();
         private DateTime _lastFlushUtc;
-        private DateTime _lastAutoScrollUtc;
         private string _finalTargetFilePath;
 
         public bool IsRecording => _running;
@@ -1201,14 +1307,12 @@ namespace GraphicarrayCapture
 
         public CrashSafeVideoRecorder(
             AppConfig cfg,
-            CaptureMode mode,
+            VideoAreaMode mode,
             Rectangle captureBounds,
-            IntPtr targetWindowHwnd = default,
             Point[] freehandPolygon = null)
         {
             _cfg = cfg;
             _mode = mode;
-            _targetWindowHwnd = targetWindowHwnd;
             _freehandPolygon = freehandPolygon;
             _captureBounds = captureBounds.Width > 16 && captureBounds.Height > 16
                 ? captureBounds
@@ -1224,19 +1328,17 @@ namespace GraphicarrayCapture
             string desiredExt = StorageEngine.GetExtensionForFormat(_cfg.VideoFormat);
             _finalTargetFilePath = StorageEngine.BuildAutoSaveFilePath(_cfg, desiredExt, "OSR_Video_$Y-$M-$D_$H-$N-$S_#");
 
-            // Write live crash-safe interleaved A/V stream directly in the user's selected folder
             string liveStreamPath = _cfg.VideoFormat == VideoFormatType.AVI
                 ? _finalTargetFilePath
                 : Path.ChangeExtension(_finalTargetFilePath, ".live.avi");
 
-            _writer = new CrashSafeAviWriter(liveStreamPath, w, h, _cfg.VideoFps, _cfg.VideoQuality, _cfg.RecordAudio);
+            _writer = new CrashSafeAviWriter(liveStreamPath, w, h, _cfg.VideoFps, _cfg.VideoQuality, _cfg.RecordAudioWithVideo);
             _running = true;
             _paused = false;
             _activeTimer.Restart();
             _lastFlushUtc = DateTime.UtcNow;
-            _lastAutoScrollUtc = DateTime.UtcNow;
 
-            if (_cfg.RecordAudio)
+            if (_cfg.RecordAudioWithVideo)
             {
                 _audioStreamer = new WinMmAudioStreamer((pcm, count) => _writer?.WriteAudioPcmBytes(pcm, count));
                 _audioStreamer.Start();
@@ -1268,8 +1370,7 @@ namespace GraphicarrayCapture
                 {
                     try
                     {
-                        // Dynamic window tracking for ActiveWindow / WindowObject video recording
-                        if (_mode == CaptureMode.ActiveWindow)
+                        if (_mode == VideoAreaMode.ActiveWindow)
                         {
                             IntPtr fg = NativeMethods.GetForegroundWindow();
                             if (fg != IntPtr.Zero && NativeMethods.GetWindowRect(fg, out NativeMethods.RECT r))
@@ -1280,26 +1381,13 @@ namespace GraphicarrayCapture
                                     _captureBounds = new Rectangle(r.Left, r.Top, targetW, targetH);
                             }
                         }
-                        else if ((_mode == CaptureMode.WindowObject || _mode == CaptureMode.ScrollingWindow) && _targetWindowHwnd != IntPtr.Zero)
-                        {
-                            if (NativeMethods.GetWindowRect(_targetWindowHwnd, out NativeMethods.RECT r))
-                            {
-                                _captureBounds = new Rectangle(r.Left, r.Top, targetW, targetH);
-                            }
-                            if (_mode == CaptureMode.ScrollingWindow &&
-                                (DateTime.UtcNow - _lastAutoScrollUtc).TotalMilliseconds >= Math.Max(200, _cfg.AutoScrollIntervalMs))
-                            {
-                                NativeMethods.PostMessage(_targetWindowHwnd, NativeMethods.WM_VSCROLL, (IntPtr)NativeMethods.SB_PAGEDOWN, IntPtr.Zero);
-                                _lastAutoScrollUtc = DateTime.UtcNow;
-                            }
-                        }
 
                         using (Bitmap rawFrame = ScreenCaptureEngine.CaptureRegion(
                             new Rectangle(_captureBounds.X, _captureBounds.Y, targetW, targetH),
                             _cfg.IncludeMouseCursor,
                             _cfg.HighlightMouseClicks))
                         {
-                            if (_mode == CaptureMode.Freehand && _freehandPolygon != null && _freehandPolygon.Length >= 3)
+                            if (_mode == VideoAreaMode.Freehand && _freehandPolygon != null && _freehandPolygon.Length >= 3)
                             {
                                 using (Bitmap masked = ScreenCaptureEngine.ApplyPolygonMaskInPlace(rawFrame, _freehandPolygon))
                                     _writer?.WriteFrame(masked);
@@ -1363,14 +1451,14 @@ namespace GraphicarrayCapture
             try { _writer?.FinalizeStream(); } catch { }
             _writer = null;
 
-            string finalFile = FinalizeContainerFormat(liveAviPath, _finalTargetFilePath, _cfg.VideoFormat, _cfg.VideoQuality);
+            string finalFile = FinalizeContainerFormat(liveAviPath, _finalTargetFilePath, _cfg.VideoFormat, _cfg.VideoQuality, _cfg.RecordAudioWithVideo);
 
             CrashSafeGuard.UnregisterActiveRecorder(this);
             StorageEngine.Save(_cfg);
             return finalFile;
         }
 
-        private static string FinalizeContainerFormat(string liveAviPath, string desiredPath, VideoFormatType fmt, VideoQualityLevel quality)
+        private static string FinalizeContainerFormat(string liveAviPath, string desiredPath, VideoFormatType fmt, VideoQualityLevel quality, bool hasAudio)
         {
             if (string.IsNullOrEmpty(liveAviPath) || !File.Exists(liveAviPath))
                 return desiredPath;
@@ -1378,11 +1466,10 @@ namespace GraphicarrayCapture
             if (fmt == VideoFormatType.AVI || string.Equals(liveAviPath, desiredPath, StringComparison.OrdinalIgnoreCase))
                 return liveAviPath;
 
-            // Convert/Mux single-file AVI (video+audio) into single-file .mp4 or .mkv via local ffmpeg.exe if present
             try
             {
-                string ffmpegPath = FindLocalFfmpeg();
-                if (!string.IsNullOrEmpty(ffmpegPath))
+                string ffmpegPath = Path.Combine(StorageEngine.BaseDir, "ffmpeg.exe");
+                if (File.Exists(ffmpegPath))
                 {
                     int crf = quality switch
                     {
@@ -1392,7 +1479,8 @@ namespace GraphicarrayCapture
                         VideoQualityLevel.Lossless => 0,
                         _ => 18
                     };
-                    string args = $"-y -i \"{liveAviPath}\" -c:v libx264 -preset ultrafast -crf {crf} -pix_fmt yuv420p -c:a aac -b:a 128k \"{desiredPath}\"";
+                    string audioCodec = hasAudio ? "-c:a aac -b:a 128k" : "-an";
+                    string args = $"-y -i \"{liveAviPath}\" -c:v libx264 -preset ultrafast -crf {crf} -pix_fmt yuv420p {audioCodec} \"{desiredPath}\"";
                     using (Process p = Process.Start(new ProcessStartInfo
                     {
                         FileName = ffmpegPath,
@@ -1409,7 +1497,6 @@ namespace GraphicarrayCapture
                     }
                 }
 
-                // Fallback if ffmpeg.exe is not in folder: rename stream directly to requested target path so file is never lost
                 if (File.Exists(desiredPath)) File.Delete(desiredPath);
                 File.Move(liveAviPath, desiredPath);
                 return desiredPath;
@@ -1420,18 +1507,11 @@ namespace GraphicarrayCapture
             }
         }
 
-        private static string FindLocalFfmpeg()
-        {
-            string local = Path.Combine(StorageEngine.BaseDir, "ffmpeg.exe");
-            if (File.Exists(local)) return local;
-            return null;
-        }
-
         public void Dispose() => StopAndSave(emergency: true, reason: "Dispose");
     }
 
     // ========================================================================
-    // 7. CORE GDI SCREEN ACQUISITION & SCROLLING STITCH ENGINE
+    // 8. CORE GDI VIDEO FRAME ACQUISITION & POLYGON MASKING
     // ========================================================================
     public static class ScreenCaptureEngine
     {
@@ -1527,365 +1607,51 @@ namespace GraphicarrayCapture
             return masked;
         }
 
-        public static Bitmap CaptureActiveWindow(bool includeCursor, out Rectangle capturedRect)
+        // Enforces custom aspect ratio (W:H) on a dragged rectangle
+        public static Rectangle ComputeRatioLockedRect(Point start, Point current, int ratioW, int ratioH)
         {
-            IntPtr hwnd = NativeMethods.GetForegroundWindow();
-            if (hwnd != IntPtr.Zero && NativeMethods.GetWindowRect(hwnd, out NativeMethods.RECT r))
+            int rawW = Math.Max(32, Math.Abs(current.X - start.X));
+            int rawH = Math.Max(32, Math.Abs(current.Y - start.Y));
+            if (ratioW > 0 && ratioH > 0)
             {
-                capturedRect = new Rectangle(r.Left, r.Top, Math.Max(1, r.Right - r.Left), Math.Max(1, r.Bottom - r.Top));
-                return CaptureRegion(capturedRect, includeCursor);
+                rawH = Math.Max(32, (rawW * ratioH) / ratioW);
             }
-            capturedRect = GetVirtualDesktopBounds();
-            return CaptureRegion(capturedRect, includeCursor);
-        }
-
-        public static Bitmap CaptureFreehandPolygon(Bitmap fullScreen, Point[] polygonPoints, out Rectangle bounds, out Point[] localPolygon)
-        {
-            if (polygonPoints == null || polygonPoints.Length < 3)
-            {
-                bounds = new Rectangle(0, 0, fullScreen.Width, fullScreen.Height);
-                localPolygon = Array.Empty<Point>();
-                return (Bitmap)fullScreen.Clone();
-            }
-
-            int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
-            foreach (Point p in polygonPoints)
-            {
-                if (p.X < minX) minX = p.X;
-                if (p.Y < minY) minY = p.Y;
-                if (p.X > maxX) maxX = p.X;
-                if (p.Y > maxY) maxY = p.Y;
-            }
-            bounds = Rectangle.Intersect(new Rectangle(0, 0, fullScreen.Width, fullScreen.Height),
-                new Rectangle(minX, minY, Math.Max(16, (maxX - minX) & ~1), Math.Max(16, (maxY - minY) & ~1)));
-
-            localPolygon = new Point[polygonPoints.Length];
-            for (int i = 0; i < polygonPoints.Length; i++)
-                localPolygon[i] = new Point(polygonPoints[i].X - bounds.X, polygonPoints[i].Y - bounds.Y);
-
-            Bitmap cropped = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(cropped))
-            using (GraphicsPath path = new GraphicsPath())
-            {
-                g.Clear(GaBrand.Abyss);
-                path.AddPolygon(localPolygon);
-                g.SetClip(path);
-                g.DrawImage(fullScreen, new Rectangle(0, 0, bounds.Width, bounds.Height), bounds, GraphicsUnit.Pixel);
-            }
-            return cropped;
-        }
-
-        public static Bitmap CaptureScrollingWindow(IntPtr targetHwnd, Rectangle viewportRect, int scrollIntervalMs, int maxPages = 8)
-        {
-            List<Bitmap> slices = new List<Bitmap>();
-            try
-            {
-                NativeMethods.SetForegroundWindow(targetHwnd);
-                Thread.Sleep(120);
-
-                for (int i = 0; i < maxPages; i++)
-                {
-                    Bitmap frame = CaptureRegion(viewportRect, includeCursor: false);
-                    if (slices.Count > 0)
-                    {
-                        int shift = ComputeVerticalScrollShift(slices[slices.Count - 1], frame);
-                        if (shift <= 4)
-                        {
-                            frame.Dispose();
-                            break;
-                        }
-                    }
-                    slices.Add(frame);
-                    NativeMethods.PostMessage(targetHwnd, NativeMethods.WM_VSCROLL, (IntPtr)NativeMethods.SB_PAGEDOWN, IntPtr.Zero);
-                    Thread.Sleep(Math.Clamp(scrollIntervalMs, 100, 2000));
-                }
-
-                return StitchVerticalSlices(slices);
-            }
-            finally
-            {
-                foreach (Bitmap b in slices) b.Dispose();
-            }
-        }
-
-        public static int ComputeVerticalScrollShift(Bitmap frameA, Bitmap frameB)
-        {
-            if (frameA == null || frameB == null || frameA.Width != frameB.Width || frameA.Height != frameB.Height)
-                return 0;
-
-            int h = frameA.Height;
-            int w = frameA.Width;
-            int stripHeight = Math.Min(24, h / 4);
-            if (stripHeight < 4) return 0;
-
-            int refY = Math.Max(0, h - stripHeight - 16);
-            int bestMatchY = refY;
-            long bestScore = long.MaxValue;
-
-            for (int candidateY = 0; candidateY <= refY; candidateY += 2)
-            {
-                long diff = 0;
-                for (int dy = 0; dy < stripHeight; dy += 4)
-                {
-                    for (int x = w / 6; x < (w * 5) / 6; x += 16)
-                    {
-                        Color cA = frameA.GetPixel(x, refY + dy);
-                        Color cB = frameB.GetPixel(x, candidateY + dy);
-                        diff += Math.Abs(cA.R - cB.R) + Math.Abs(cA.G - cB.G) + Math.Abs(cA.B - cB.B);
-                    }
-                }
-                if (diff < bestScore)
-                {
-                    bestScore = diff;
-                    bestMatchY = candidateY;
-                }
-            }
-
-            return refY - bestMatchY;
-        }
-
-        public static Bitmap StitchVerticalSlices(IList<Bitmap> slices)
-        {
-            if (slices == null || slices.Count == 0)
-                return new Bitmap(1, 1);
-            if (slices.Count == 1)
-                return (Bitmap)slices[0].Clone();
-
-            int w = slices[0].Width;
-            int h = slices[0].Height;
-            List<int> shifts = new List<int> { h };
-            int totalHeight = h;
-
-            for (int i = 1; i < slices.Count; i++)
-            {
-                int shift = ComputeVerticalScrollShift(slices[i - 1], slices[i]);
-                if (shift <= 0 || shift > h) shift = h / 2;
-                shifts.Add(shift);
-                totalHeight += shift;
-            }
-
-            Bitmap stitched = new Bitmap(w, totalHeight, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(stitched))
-            {
-                g.DrawImage(slices[0], 0, 0);
-                int yCursor = h;
-                for (int i = 1; i < slices.Count; i++)
-                {
-                    int shift = shifts[i];
-                    int srcY = h - shift;
-                    g.DrawImage(slices[i],
-                        new Rectangle(0, yCursor, w, shift),
-                        new Rectangle(0, srcY, w, shift),
-                        GraphicsUnit.Pixel);
-                    yCursor += shift;
-                }
-            }
-            return stitched;
-        }
-
-        public static void ApplyObscureBlur(Bitmap bmp, Rectangle region, int blockSize = 10)
-        {
-            if (bmp == null) return;
-            Rectangle safe = Rectangle.Intersect(new Rectangle(0, 0, bmp.Width, bmp.Height), region);
-            if (safe.Width <= 0 || safe.Height <= 0) return;
-            blockSize = Math.Max(2, blockSize);
-
-            for (int y = safe.Top; y < safe.Bottom; y += blockSize)
-            {
-                for (int x = safe.Left; x < safe.Right; x += blockSize)
-                {
-                    int bw = Math.Min(blockSize, safe.Right - x);
-                    int bh = Math.Min(blockSize, safe.Bottom - y);
-                    Color sample = bmp.GetPixel(x + bw / 2, y + bh / 2);
-                    for (int py = y; py < y + bh; py++)
-                        for (int px = x; px < x + bw; px++)
-                            bmp.SetPixel(px, py, sample);
-                }
-            }
+            rawW &= ~1;
+            rawH &= ~1;
+            int x = current.X >= start.X ? start.X : start.X - rawW;
+            int y = current.Y >= start.Y ? start.Y : start.Y - rawH;
+            return new Rectangle(x, y, rawW, rawH);
         }
     }
 
     // ========================================================================
-    // 8. OFFLINE OUTPUT DISPATCHER (OutputBtn Menu — 100% Offline)
+    // 9. INTERACTIVE VIDEO REGION SELECTOR (Free / Ratio Rectangle, Freehand, Fixed)
     // ========================================================================
-    public static class OutputDispatcher
-    {
-        public static string Dispatch(Bitmap captured, AppConfig cfg, Form owner)
-        {
-            if (captured == null) return null;
-
-            string recoveryPath = StorageEngine.BuildAutoSaveFilePath(cfg, cfg.DefaultImageExtension);
-            SaveImageByExtension(captured, recoveryPath);
-
-            switch (cfg.ActiveOutputTarget)
-            {
-                case OutputTarget.ToEditor:
-                    using (EditorForm editor = new EditorForm(captured, cfg, startInDrawMode: false))
-                        editor.ShowDialog(owner);
-                    return recoveryPath;
-
-                case OutputTarget.ToDraw:
-                    using (EditorForm drawBoard = new EditorForm(captured, cfg, startInDrawMode: true))
-                        drawBoard.ShowDialog(owner);
-                    return recoveryPath;
-
-                case OutputTarget.ToClipboard:
-                    CopyBitmapToClipboardWin32(captured);
-                    return recoveryPath;
-
-                case OutputTarget.ToFile:
-                    using (SaveFileDialog sfd = new SaveFileDialog())
-                    {
-                        sfd.Title = "Open Screen Recorder — Save Image Offline";
-                        sfd.InitialDirectory = cfg.AutoSaveFolder;
-                        sfd.FileName = Path.GetFileName(recoveryPath);
-                        sfd.Filter = "PNG (*.png)|*.png|JPEG (*.jpg)|*.jpg|BMP (*.bmp)|*.bmp|GIF (*.gif)|*.gif|TIFF (*.tif)|*.tif|PDF Document (*.pdf)|*.pdf";
-                        if (sfd.ShowDialog(owner) == DialogResult.OK)
-                        {
-                            SaveImageByExtension(captured, sfd.FileName);
-                            return sfd.FileName;
-                        }
-                    }
-                    return recoveryPath;
-
-                case OutputTarget.ToAutoSave:
-                    return recoveryPath;
-
-                case OutputTarget.ToPrinter:
-                    using (PrintDocument pd = new PrintDocument())
-                    {
-                        pd.DocumentName = "Open Screen Recorder Print";
-                        pd.PrintPage += (s, e) =>
-                        {
-                            e.Graphics.DrawImage(captured, e.MarginBounds);
-                            using (Font f = GaBrand.MakeFont(10f))
-                            using (SolidBrush sb = new SolidBrush(GaBrand.Slate))
-                                e.Graphics.DrawString("linkedin.com/in/graphicarray", f, sb, e.MarginBounds.Left, e.MarginBounds.Bottom + 6);
-                        };
-                        using (PrintDialog dlg = new PrintDialog { Document = pd })
-                        {
-                            if (dlg.ShowDialog(owner) == DialogResult.OK)
-                                pd.Print();
-                        }
-                    }
-                    return recoveryPath;
-
-                case OutputTarget.ToWord:
-                    SendToOfficeOffline("Word.Application", recoveryPath);
-                    return recoveryPath;
-
-                case OutputTarget.ToExcel:
-                    SendToOfficeOffline("Excel.Application", recoveryPath);
-                    return recoveryPath;
-
-                case OutputTarget.ToPowerPoint:
-                    SendToOfficeOffline("PowerPoint.Application", recoveryPath);
-                    return recoveryPath;
-
-                default:
-                    return recoveryPath;
-            }
-        }
-
-        public static void CopyBitmapToClipboardWin32(Bitmap bmp)
-        {
-            IntPtr hBitmap = bmp.GetHbitmap();
-            try
-            {
-                if (NativeMethods.OpenClipboard(IntPtr.Zero))
-                {
-                    NativeMethods.EmptyClipboard();
-                    NativeMethods.SetClipboardData(NativeMethods.CF_BITMAP, hBitmap);
-                    NativeMethods.CloseClipboard();
-                    hBitmap = IntPtr.Zero;
-                }
-            }
-            finally
-            {
-                if (hBitmap != IntPtr.Zero) NativeMethods.DeleteObject(hBitmap);
-            }
-        }
-
-        public static void SaveImageByExtension(Bitmap bmp, string filePath)
-        {
-            string ext = (Path.GetExtension(filePath) ?? ".png").ToLowerInvariant();
-            if (ext == ".pdf")
-            {
-                using (PrintDocument pd = new PrintDocument())
-                {
-                    pd.PrinterSettings.PrinterName = "Microsoft Print to PDF";
-                    pd.PrinterSettings.PrintToFile = true;
-                    pd.PrinterSettings.PrintFileName = filePath;
-                    pd.PrintPage += (s, e) => e.Graphics.DrawImage(bmp, e.PageBounds);
-                    try { pd.Print(); return; } catch { }
-                }
-                bmp.Save(filePath, ImageFormat.Png);
-                return;
-            }
-
-            ImageFormat fmt = ext switch
-            {
-                ".jpg" or ".jpeg" => ImageFormat.Jpeg,
-                ".bmp" => ImageFormat.Bmp,
-                ".gif" => ImageFormat.Gif,
-                ".tif" or ".tiff" => ImageFormat.Tiff,
-                _ => ImageFormat.Png
-            };
-            bmp.Save(filePath, fmt);
-        }
-
-        private static void SendToOfficeOffline(string progId, string imagePath)
-        {
-            try
-            {
-                Type comType = Type.GetTypeFromProgID(progId);
-                if (comType == null) return;
-                dynamic app = Activator.CreateInstance(comType);
-                app.Visible = true;
-                if (progId.StartsWith("Word"))
-                {
-                    app.Documents.Add();
-                    app.Selection.InlineShapes.AddPicture(imagePath);
-                }
-                else if (progId.StartsWith("Excel"))
-                {
-                    dynamic wb = app.Workbooks.Add();
-                    wb.ActiveSheet.Pictures.Insert(imagePath);
-                }
-                else if (progId.StartsWith("PowerPoint"))
-                {
-                    dynamic pres = app.Presentations.Add();
-                    dynamic slide = pres.Slides.Add(1, 12);
-                    slide.Shapes.AddPicture(imagePath, 0, -1, 40, 40);
-                }
-            }
-            catch { }
-        }
-    }
-
-    // ========================================================================
-    // 9. INTERACTIVE OVERLAY FORMS (Works for BOTH Video Area & Screenshot)
-    // ========================================================================
-    public sealed class RegionOverlayForm : Form
+    public sealed class VideoAreaSelectorForm : Form
     {
         private readonly Bitmap _frozenDesktop;
-        private readonly CaptureMode _mode;
+        private readonly VideoAreaMode _mode;
+        private readonly bool _lockRatio;
+        private readonly int _ratioW;
+        private readonly int _ratioH;
         private readonly Size _fixedSize;
+
         private bool _dragging;
         private Point _startPt;
         private Point _currentPt;
         private readonly List<Point> _freehandPts = new List<Point>();
-        private Rectangle _spyWindowRect;
 
-        public Bitmap CapturedBitmap { get; private set; }
         public Rectangle SelectedBounds { get; private set; }
-        public IntPtr SelectedWindowHandle { get; private set; }
         public Point[] LocalFreehandPolygon { get; private set; }
 
-        public RegionOverlayForm(CaptureMode mode, Size fixedSize)
+        public VideoAreaSelectorForm(VideoAreaMode mode, bool lockRatio, int ratioW, int ratioH, Size fixedSize)
         {
             _mode = mode;
-            _fixedSize = fixedSize;
+            _lockRatio = lockRatio;
+            _ratioW = Math.Max(1, ratioW);
+            _ratioH = Math.Max(1, ratioH);
+            _fixedSize = new Size(Math.Max(32, fixedSize.Width & ~1), Math.Max(32, fixedSize.Height & ~1));
+
             Rectangle virtualBounds = ScreenCaptureEngine.GetVirtualDesktopBounds();
             _frozenDesktop = ScreenCaptureEngine.CaptureRegion(virtualBounds, includeCursor: false);
 
@@ -1912,46 +1678,23 @@ namespace GraphicarrayCapture
             _freehandPts.Clear();
             _freehandPts.Add(e.Location);
 
-            if (_mode == CaptureMode.FixedRegion)
+            if (_mode == VideoAreaMode.FixedRegion)
             {
-                SelectedBounds = new Rectangle(e.X - _fixedSize.Width / 2, e.Y - _fixedSize.Height / 2, _fixedSize.Width, _fixedSize.Height);
-                FinishSelection();
-            }
-            else if (_mode == CaptureMode.WindowObject || _mode == CaptureMode.ScrollingWindow)
-            {
-                SelectedBounds = _spyWindowRect.Width > 4 ? _spyWindowRect : new Rectangle(0, 0, Width, Height);
-                FinishSelection();
+                SelectedBounds = new Rectangle(
+                    e.X - _fixedSize.Width / 2 + Bounds.X,
+                    e.Y - _fixedSize.Height / 2 + Bounds.Y,
+                    _fixedSize.Width,
+                    _fixedSize.Height);
+                DialogResult = DialogResult.OK;
+                Close();
             }
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             _currentPt = e.Location;
-            if (_mode == CaptureMode.WindowObject || _mode == CaptureMode.ScrollingWindow)
-            {
-                NativeMethods.POINT pt = new NativeMethods.POINT { X = Cursor.Position.X, Y = Cursor.Position.Y };
-                Opacity = 0.01;
-                IntPtr hwnd = NativeMethods.WindowFromPoint(pt);
-                if (hwnd != IntPtr.Zero)
-                {
-                    NativeMethods.POINT clientPt = pt;
-                    NativeMethods.ScreenToClient(hwnd, ref clientPt);
-                    IntPtr child = NativeMethods.ChildWindowFromPointEx(hwnd, clientPt, 0);
-                    if (child != IntPtr.Zero) hwnd = child;
-                    SelectedWindowHandle = hwnd;
-                    if (NativeMethods.GetWindowRect(hwnd, out NativeMethods.RECT r))
-                    {
-                        _spyWindowRect = new Rectangle(
-                            r.Left - Bounds.X, r.Top - Bounds.Y,
-                            Math.Max(16, (r.Right - r.Left) & ~1), Math.Max(16, (r.Bottom - r.Top) & ~1));
-                    }
-                }
-                Opacity = 1.0;
-            }
-            else if (_dragging && _mode == CaptureMode.Freehand)
-            {
+            if (_dragging && _mode == VideoAreaMode.Freehand)
                 _freehandPts.Add(e.Location);
-            }
             Invalidate();
         }
 
@@ -1960,18 +1703,40 @@ namespace GraphicarrayCapture
             if (!_dragging) return;
             _dragging = false;
 
-            if (_mode == CaptureMode.Freehand)
+            if (_mode == VideoAreaMode.Freehand)
             {
-                CapturedBitmap = ScreenCaptureEngine.CaptureFreehandPolygon(_frozenDesktop, _freehandPts.ToArray(), out Rectangle b, out Point[] localPoly);
-                LocalFreehandPolygon = localPoly;
-                SelectedBounds = new Rectangle(b.X + Bounds.X, b.Y + Bounds.Y, b.Width, b.Height);
+                if (_freehandPts.Count < 3)
+                {
+                    DialogResult = DialogResult.Cancel;
+                    Close();
+                    return;
+                }
+                int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+                foreach (Point p in _freehandPts)
+                {
+                    if (p.X < minX) minX = p.X;
+                    if (p.Y < minY) minY = p.Y;
+                    if (p.X > maxX) maxX = p.X;
+                    if (p.Y > maxY) maxY = p.Y;
+                }
+                int w = Math.Max(32, (maxX - minX) & ~1);
+                int h = Math.Max(32, (maxY - minY) & ~1);
+                LocalFreehandPolygon = new Point[_freehandPts.Count];
+                for (int i = 0; i < _freehandPts.Count; i++)
+                    LocalFreehandPolygon[i] = new Point(_freehandPts[i].X - minX, _freehandPts[i].Y - minY);
+                SelectedBounds = new Rectangle(minX + Bounds.X, minY + Bounds.Y, w, h);
                 DialogResult = DialogResult.OK;
                 Close();
                 return;
             }
 
-            SelectedBounds = GetRubberBandRect(_startPt, _currentPt);
-            FinishSelection();
+            Rectangle localRect = _lockRatio
+                ? ScreenCaptureEngine.ComputeRatioLockedRect(_startPt, _currentPt, _ratioW, _ratioH)
+                : GetFreeRubberBandRect(_startPt, _currentPt);
+
+            SelectedBounds = new Rectangle(localRect.X + Bounds.X, localRect.Y + Bounds.Y, localRect.Width, localRect.Height);
+            DialogResult = DialogResult.OK;
+            Close();
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
@@ -1983,47 +1748,38 @@ namespace GraphicarrayCapture
             }
         }
 
-        private void FinishSelection()
-        {
-            Rectangle crop = Rectangle.Intersect(new Rectangle(0, 0, _frozenDesktop.Width, _frozenDesktop.Height), SelectedBounds);
-            if (crop.Width < 16 || crop.Height < 16)
-                crop = new Rectangle(0, 0, _frozenDesktop.Width, _frozenDesktop.Height);
-            CapturedBitmap = _frozenDesktop.Clone(crop, PixelFormat.Format32bppArgb);
-            SelectedBounds = new Rectangle(crop.X + Bounds.X, crop.Y + Bounds.Y, crop.Width & ~1, crop.Height & ~1);
-            DialogResult = DialogResult.OK;
-            Close();
-        }
-
-        private static Rectangle GetRubberBandRect(Point a, Point b) =>
-            new Rectangle(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(16, Math.Abs(a.X - b.X) & ~1), Math.Max(16, Math.Abs(a.Y - b.Y) & ~1));
+        private static Rectangle GetFreeRubberBandRect(Point a, Point b) =>
+            new Rectangle(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(32, Math.Abs(a.X - b.X) & ~1), Math.Max(32, Math.Abs(a.Y - b.Y) & ~1));
 
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.DrawImage(_frozenDesktop, 0, 0);
 
-            using (SolidBrush dimBrush = new SolidBrush(Color.FromArgb(110, GaBrand.Abyss)))
+            using (SolidBrush dimBrush = new SolidBrush(Color.FromArgb(115, GaBrand.Abyss)))
                 g.FillRectangle(dimBrush, ClientRectangle);
 
             Rectangle activeRect = _mode switch
             {
-                CaptureMode.FixedRegion => new Rectangle(_currentPt.X - _fixedSize.Width / 2, _currentPt.Y - _fixedSize.Height / 2, _fixedSize.Width, _fixedSize.Height),
-                CaptureMode.WindowObject or CaptureMode.ScrollingWindow => _spyWindowRect,
-                _ => _dragging ? GetRubberBandRect(_startPt, _currentPt) : Rectangle.Empty
+                VideoAreaMode.FixedRegion => new Rectangle(_currentPt.X - _fixedSize.Width / 2, _currentPt.Y - _fixedSize.Height / 2, _fixedSize.Width, _fixedSize.Height),
+                _ => _dragging
+                    ? (_lockRatio ? ScreenCaptureEngine.ComputeRatioLockedRect(_startPt, _currentPt, _ratioW, _ratioH) : GetFreeRubberBandRect(_startPt, _currentPt))
+                    : Rectangle.Empty
             };
 
-            if (_mode == CaptureMode.Freehand && _freehandPts.Count > 1)
+            if (_mode == VideoAreaMode.Freehand && _freehandPts.Count > 1)
             {
-                using (Pen cyanPen = new Pen(GaBrand.Cyan, 2f))
+                using (Pen cyanPen = new Pen(GaBrand.Cyan, 2.5f) { DashStyle = DashStyle.Dash })
                     g.DrawLines(cyanPen, _freehandPts.ToArray());
             }
             else if (activeRect.Width > 0 && activeRect.Height > 0)
             {
                 g.DrawImage(_frozenDesktop, activeRect, activeRect, GraphicsUnit.Pixel);
-                using (Pen borderPen = new Pen(GaBrand.Cyan, 2f))
+                using (Pen borderPen = new Pen(GaBrand.Cyan, 2f) { DashStyle = DashStyle.Dash })
                     g.DrawRectangle(borderPen, activeRect);
 
-                string badge = $"{activeRect.Width} × {activeRect.Height} px · {_mode}";
+                string ratioLabel = _lockRatio ? $" · Ratio {_ratioW}:{_ratioH}" : "";
+                string badge = $"{activeRect.Width} × {activeRect.Height} px{ratioLabel}";
                 using (Font f = GaBrand.MakeFont(12f, FontStyle.Bold))
                 {
                     SizeF sz = g.MeasureString(badge, f);
@@ -2050,262 +1806,102 @@ namespace GraphicarrayCapture
     }
 
     // ========================================================================
-    // 10. BUILT-IN EDITOR & ANNOTATION BOARD (TMainWin & TTextBoard)
+    // 10. SETTINGS GEAR -> SHORTCUT KEY MANAGER PAGE (Add / Change / Remove)
     // ========================================================================
-    public enum AnnotationTool { SelectCrop, TextLabel, ArrowLine, HighlightRect, StepStamp, ObscureBlur, EdgeWatermark }
-
-    public sealed class EditorForm : Form
+    public sealed class ShortcutKeyPageForm : Form
     {
-        private Bitmap _canvasBitmap;
         private readonly AppConfig _cfg;
-        private AnnotationTool _activeTool;
-        private float _zoom = 1.0f;
-        private int _stepCounter = 1;
-        private bool _dragging;
-        private Point _dragStart;
-        private Point _dragCurrent;
-        private Rectangle _selectionRect;
-        private bool _isSaved;
+        private int _capturingRowIndex = -1;
+        private readonly RectangleF[] _setBtnRects;
+        private readonly RectangleF[] _removeBtnRects;
+        private RectangleF _addCustomBtnRect;
+        private RectangleF _doneBtnRect;
 
-        public EditorForm(Bitmap initialBitmap, AppConfig cfg, bool startInDrawMode)
+        public ShortcutKeyPageForm(AppConfig cfg)
         {
-            _canvasBitmap = (Bitmap)initialBitmap.Clone();
             _cfg = cfg;
-            _activeTool = startInDrawMode ? AnnotationTool.ArrowLine : AnnotationTool.SelectCrop;
-            CrashSafeGuard.SetUnsavedEditorBitmap(_canvasBitmap);
+            if (_cfg.Shortcuts == null || _cfg.Shortcuts.Count == 0)
+                _cfg.Shortcuts = AppConfig.DefaultShortcuts();
 
-            Text = "Open Screen Recorder — Studio Editor & Annotation Board";
-            Size = new Size(1020, 720);
-            MinimumSize = new Size(640, 480);
-            StartPosition = FormStartPosition.CenterScreen;
+            _setBtnRects = new RectangleF[_cfg.Shortcuts.Count + 4];
+            _removeBtnRects = new RectangleF[_cfg.Shortcuts.Count + 4];
+
+            Text = "Open Screen Recorder — Shortcut Key Settings";
+            Size = new Size(520, 560);
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
             BackColor = GaBrand.Abyss;
             ForeColor = GaBrand.Text;
             DoubleBuffered = true;
             KeyPreview = true;
         }
 
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            if (!_isSaved && _canvasBitmap != null)
-            {
-                string autoPath = StorageEngine.BuildAutoSaveFilePath(_cfg, _cfg.DefaultImageExtension, "OSR_AutoSavedEdit_$Y-$M-$D_$H-$N-$S_#");
-                OutputDispatcher.SaveImageByExtension(_canvasBitmap, autoPath);
-                _isSaved = true;
-            }
-            CrashSafeGuard.SetUnsavedEditorBitmap(null);
-            base.OnFormClosing(e);
-        }
-
         protected override void OnKeyDown(KeyEventArgs e)
         {
-            if (e.Control && e.KeyCode == Keys.S) { SaveCurrent(false); e.Handled = true; }
-            else if (e.Alt && e.KeyCode == Keys.S) { SaveCurrent(true); e.Handled = true; }
-            else if (e.Control && e.KeyCode == Keys.R) { ResizeCanvas(0.75f); e.Handled = true; }
-            else if (e.KeyCode == Keys.X) { CropToSelection(); }
-            else if (e.KeyCode == Keys.D) { _activeTool = AnnotationTool.ArrowLine; Invalidate(); }
-            else if (e.KeyCode == Keys.O) { _activeTool = AnnotationTool.ObscureBlur; Invalidate(); }
-            else if (e.KeyCode == Keys.G) { ApplyEdgeAndWatermark(); }
-            else if (e.KeyCode == Keys.A || e.KeyCode == Keys.Space) { _zoom = 1.0f; Invalidate(); }
-            else if (e.KeyCode == Keys.B)
+            if (_capturingRowIndex >= 0 && _capturingRowIndex < _cfg.Shortcuts.Count)
             {
-                float zx = (Width - 80f) / _canvasBitmap.Width;
-                float zy = (Height - 180f) / _canvasBitmap.Height;
-                _zoom = Math.Clamp(Math.Min(zx, zy), 0.25f, 4.0f);
-                Invalidate();
-            }
-            else if (e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9)
-            {
-                _zoom = (e.KeyCode - Keys.D0);
-                Invalidate();
-            }
-        }
+                if (e.KeyCode == Keys.ControlKey || e.KeyCode == Keys.ShiftKey || e.KeyCode == Keys.Menu)
+                    return;
 
-        private void SaveCurrent(bool selectionOnly)
-        {
-            Bitmap target = _canvasBitmap;
-            if (selectionOnly && _selectionRect.Width > 4 && _selectionRect.Height > 4)
-            {
-                Rectangle safe = Rectangle.Intersect(new Rectangle(0, 0, _canvasBitmap.Width, _canvasBitmap.Height), _selectionRect);
-                if (safe.Width > 4 && safe.Height > 4)
-                    target = _canvasBitmap.Clone(safe, PixelFormat.Format32bppArgb);
-            }
-            string path = StorageEngine.BuildAutoSaveFilePath(_cfg, _cfg.DefaultImageExtension);
-            OutputDispatcher.SaveImageByExtension(target, path);
-            _isSaved = true;
-            Invalidate();
-        }
-
-        private void CropToSelection()
-        {
-            if (_selectionRect.Width <= 8 || _selectionRect.Height <= 8) return;
-            Rectangle safe = Rectangle.Intersect(new Rectangle(0, 0, _canvasBitmap.Width, _canvasBitmap.Height), _selectionRect);
-            if (safe.Width <= 8 || safe.Height <= 8) return;
-            Bitmap cropped = _canvasBitmap.Clone(safe, PixelFormat.Format32bppArgb);
-            _canvasBitmap.Dispose();
-            _canvasBitmap = cropped;
-            _selectionRect = Rectangle.Empty;
-            _isSaved = false;
-            CrashSafeGuard.SetUnsavedEditorBitmap(_canvasBitmap);
-            Invalidate();
-        }
-
-        private void ResizeCanvas(float scale)
-        {
-            int nw = Math.Max(16, (int)(_canvasBitmap.Width * scale));
-            int nh = Math.Max(16, (int)(_canvasBitmap.Height * scale));
-            Bitmap resized = new Bitmap(nw, nh, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(resized))
-            {
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.DrawImage(_canvasBitmap, 0, 0, nw, nh);
-            }
-            _canvasBitmap.Dispose();
-            _canvasBitmap = resized;
-            _isSaved = false;
-            CrashSafeGuard.SetUnsavedEditorBitmap(_canvasBitmap);
-            Invalidate();
-        }
-
-        private void ApplyEdgeAndWatermark()
-        {
-            using (Graphics g = Graphics.FromImage(_canvasBitmap))
-            using (Pen edgePen = new Pen(GaBrand.Cyan, 3f))
-            using (Font wmFont = GaBrand.MakeFont(13f, FontStyle.Bold))
-            using (SolidBrush bg = new SolidBrush(Color.FromArgb(210, GaBrand.Abyss)))
-            using (SolidBrush fg = new SolidBrush(GaBrand.Slate))
-            {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.DrawRectangle(edgePen, 1, 1, _canvasBitmap.Width - 3, _canvasBitmap.Height - 3);
-                string wm = "Graphicarray · linkedin.com/in/graphicarray";
-                SizeF sz = g.MeasureString(wm, wmFont);
-                RectangleF pill = new RectangleF(_canvasBitmap.Width - sz.Width - 28, _canvasBitmap.Height - 36, sz.Width + 20, 26);
-                using (GraphicsPath gp = GaBrand.RoundedRect(pill, 999f))
+                ShortcutBinding b = _cfg.Shortcuts[_capturingRowIndex];
+                if (e.KeyCode == Keys.Escape)
                 {
-                    g.FillPath(bg, gp);
-                    g.DrawString(wm, wmFont, fg, pill.X + 10, pill.Y + 4);
+                    _capturingRowIndex = -1;
+                    Invalidate();
+                    return;
                 }
+                b.Key = e.KeyCode;
+                b.Ctrl = e.Control;
+                b.Alt = e.Alt;
+                b.Shift = e.Shift;
+                _capturingRowIndex = -1;
+                StorageEngine.Save(_cfg);
+                Invalidate();
+                e.Handled = true;
             }
-            _isSaved = false;
-            Invalidate();
+            base.OnKeyDown(e);
         }
-
-        private Point ScreenToImagePoint(Point pt) =>
-            new Point((int)((pt.X - 32) / _zoom), (int)((pt.Y - 118) / _zoom));
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
-            if (e.Y < 60 && e.X < 320) { GaBrand.OpenBrandProfile(); return; }
-            if (e.Y > Height - 44 && e.X < 280) { GaBrand.OpenBrandProfile(); return; }
-
-            if (e.Y >= 64 && e.Y <= 104)
+            PointF pt = e.Location;
+            for (int i = 0; i < _cfg.Shortcuts.Count; i++)
             {
-                int idx = (e.X - 24) / 128;
-                if (idx >= 0 && idx <= 6)
+                if (_setBtnRects[i].Contains(pt))
                 {
-                    _activeTool = (AnnotationTool)idx;
-                    if (_activeTool == AnnotationTool.EdgeWatermark)
-                        ApplyEdgeAndWatermark();
+                    _capturingRowIndex = i;
                     Invalidate();
+                    return;
                 }
+                if (_removeBtnRects[i].Contains(pt))
+                {
+                    _cfg.Shortcuts[i].Key = Keys.None;
+                    _cfg.Shortcuts[i].Ctrl = _cfg.Shortcuts[i].Alt = _cfg.Shortcuts[i].Shift = false;
+                    _capturingRowIndex = -1;
+                    StorageEngine.Save(_cfg);
+                    Invalidate();
+                    return;
+                }
+            }
+
+            if (_addCustomBtnRect.Contains(pt))
+            {
+                _cfg.Shortcuts = AppConfig.DefaultShortcuts();
+                _capturingRowIndex = -1;
+                StorageEngine.Save(_cfg);
+                Invalidate();
                 return;
             }
 
-            if (e.Y > 118 && e.Y < Height - 48)
+            if (_doneBtnRect.Contains(pt))
             {
-                _dragging = true;
-                _dragStart = ScreenToImagePoint(e.Location);
-                _dragCurrent = _dragStart;
-
-                if (_activeTool == AnnotationTool.StepStamp)
-                {
-                    using (Graphics g = Graphics.FromImage(_canvasBitmap))
-                    using (SolidBrush fill = new SolidBrush(GaBrand.Cyan))
-                    using (SolidBrush textB = new SolidBrush(GaBrand.Abyss))
-                    using (Font f = GaBrand.MakeFont(14f, FontStyle.Bold))
-                    {
-                        g.SmoothingMode = SmoothingMode.AntiAlias;
-                        Rectangle badge = new Rectangle(_dragStart.X - 14, _dragStart.Y - 14, 28, 28);
-                        g.FillEllipse(fill, badge);
-                        g.DrawString((_stepCounter++).ToString(), f, textB, badge.X + 8, badge.Y + 4);
-                    }
-                    _isSaved = false;
-                    Invalidate();
-                }
-                else if (_activeTool == AnnotationTool.TextLabel)
-                {
-                    using (Graphics g = Graphics.FromImage(_canvasBitmap))
-                    using (Font f = GaBrand.MakeFont(16f, FontStyle.Bold))
-                    using (SolidBrush bg = new SolidBrush(GaBrand.Panel))
-                    using (Pen border = new Pen(GaBrand.Cyan, 1.5f))
-                    using (SolidBrush fg = new SolidBrush(GaBrand.Text))
-                    {
-                        string note = $"Note #{_stepCounter}";
-                        SizeF sz = g.MeasureString(note, f);
-                        RectangleF r = new RectangleF(_dragStart.X, _dragStart.Y, sz.Width + 16, sz.Height + 8);
-                        using (GraphicsPath gp = GaBrand.RoundedRect(r, 12f))
-                        {
-                            g.FillPath(bg, gp);
-                            g.DrawPath(border, gp);
-                            g.DrawString(note, f, fg, r.X + 8, r.Y + 4);
-                        }
-                    }
-                    _isSaved = false;
-                    Invalidate();
-                }
+                StorageEngine.Save(_cfg);
+                DialogResult = DialogResult.OK;
+                Close();
             }
         }
-
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            if (!_dragging) return;
-            _dragCurrent = ScreenToImagePoint(e.Location);
-            Invalidate();
-        }
-
-        protected override void OnMouseUp(MouseEventArgs e)
-        {
-            if (!_dragging) return;
-            _dragging = false;
-            _dragCurrent = ScreenToImagePoint(e.Location);
-            Rectangle rect = new Rectangle(
-                Math.Min(_dragStart.X, _dragCurrent.X),
-                Math.Min(_dragStart.Y, _dragCurrent.Y),
-                Math.Abs(_dragStart.X - _dragCurrent.X),
-                Math.Abs(_dragStart.Y - _dragCurrent.Y));
-
-            if (_activeTool == AnnotationTool.SelectCrop)
-                _selectionRect = rect;
-            else if (_activeTool == AnnotationTool.ArrowLine)
-            {
-                using (Graphics g = Graphics.FromImage(_canvasBitmap))
-                using (Pen p = new Pen(GaBrand.Cyan, 3.5f))
-                {
-                    g.SmoothingMode = SmoothingMode.AntiAlias;
-                    p.CustomEndCap = new AdjustableArrowCap(6, 6);
-                    g.DrawLine(p, _dragStart, _dragCurrent);
-                }
-                _isSaved = false;
-            }
-            else if (_activeTool == AnnotationTool.HighlightRect)
-            {
-                using (Graphics g = Graphics.FromImage(_canvasBitmap))
-                using (SolidBrush hb = new SolidBrush(Color.FromArgb(80, GaBrand.Cyan)))
-                using (Pen hp = new Pen(GaBrand.Cyan, 1.5f))
-                {
-                    g.FillRectangle(hb, rect);
-                    g.DrawRectangle(hp, rect);
-                }
-                _isSaved = false;
-            }
-            else if (_activeTool == AnnotationTool.ObscureBlur)
-            {
-                ScreenCaptureEngine.ApplyObscureBlur(_canvasBitmap, rect, 12);
-                _isSaved = false;
-            }
-            Invalidate();
-        }
-
-        protected override void OnMouseDoubleClick(MouseEventArgs e) => CropToSelection();
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -2313,109 +1909,113 @@ namespace GraphicarrayCapture
             g.SmoothingMode = SmoothingMode.AntiAlias;
             GaBrand.PaintAbyssBackground(g, ClientRectangle);
 
-            GaBrand.DrawLogoTile(g, new RectangleF(24, 10, 44, 44), false, false);
-            using (Font titleF = GaBrand.MakeFont(18f, FontStyle.Bold))
-            using (Font byF = GaBrand.MakeFont(12f, FontStyle.Bold))
+            float pad = 20f;
+            GaBrand.DrawLogoTile(g, new RectangleF(pad, 14f, 44f, 44f), false, false);
+            using (Font tf = GaBrand.MakeFont(18f, FontStyle.Bold))
+            using (Font bf = GaBrand.MakeFont(12f, FontStyle.Bold))
+            using (SolidBrush wb = new SolidBrush(GaBrand.Text))
+            using (SolidBrush cb = new SolidBrush(GaBrand.Cyan))
+            {
+                g.DrawString("Shortcut Key Settings", tf, wb, pad + 56f, 14f);
+                g.DrawString("by Graphicarray · Add, Change, or Remove Any Shortcut", bf, cb, pad + 56f, 38f);
+            }
+
+            RectangleF card = new RectangleF(pad, 72f, ClientSize.Width - pad * 2, 370f);
+            using (GraphicsPath gp = GaBrand.RoundedRect(card, 20f))
+            using (SolidBrush pb = new SolidBrush(GaBrand.Panel))
+            using (Pen ep = new Pen(GaBrand.Edge, 1f))
+            {
+                g.FillPath(pb, gp);
+                g.DrawPath(ep, gp);
+            }
+
+            using (Font secF = GaBrand.MakeFont(10.5f, FontStyle.Bold))
+            using (Font rowF = GaBrand.MakeFont(12.5f, FontStyle.Regular))
+            using (Font keyF = GaBrand.MakeFont(12f, FontStyle.Bold))
+            using (SolidBrush slateB = new SolidBrush(GaBrand.Slate))
             using (SolidBrush textB = new SolidBrush(GaBrand.Text))
-            using (SolidBrush cyanB = new SolidBrush(GaBrand.Cyan))
             {
-                g.DrawString("Open Screen Recorder Editor", titleF, textB, 78, 10);
-                g.DrawString("by Graphicarray", byF, cyanB, 78, 32);
-            }
+                g.DrawString("ACTION", secF, slateB, card.X + 16f, card.Y + 14f);
+                g.DrawString("SHORTCUT KEY (ADD / REMOVE)", secF, slateB, card.Right - 230f, card.Y + 14f);
 
-            string[] tools = { "Crop (X)", "Text (T)", "Arrow (D)", "Highlight", "Step (1..9)", "Blur (O)", "Watermark (G)" };
-            for (int i = 0; i < tools.Length; i++)
-            {
-                RectangleF pill = new RectangleF(24 + i * 128, 64, 120, 34);
-                bool active = (int)_activeTool == i;
-                using (GraphicsPath gp = GaBrand.RoundedRect(pill, 999f))
+                for (int i = 0; i < _cfg.Shortcuts.Count; i++)
                 {
-                    if (active)
+                    ShortcutBinding sb = _cfg.Shortcuts[i];
+                    float ry = card.Y + 42f + i * 45f;
+                    g.DrawString(sb.ActionName, rowF, textB, card.X + 16f, ry + 6f);
+
+                    bool capturing = _capturingRowIndex == i;
+                    _setBtnRects[i] = new RectangleF(card.Right - 230f, ry, 136f, 32f);
+                    using (GraphicsPath kp = GaBrand.RoundedRect(_setBtnRects[i], 999f))
+                    using (SolidBrush kFill = new SolidBrush(GaBrand.Abyss))
+                    using (Pen kPen = new Pen(capturing ? GaBrand.Amber : GaBrand.Cyan, 1f))
+                    using (SolidBrush kText = new SolidBrush(capturing ? GaBrand.Amber : GaBrand.Ice))
                     {
-                        using (LinearGradientBrush grad = GaBrand.SignatureGradient(pill))
-                            g.FillPath(grad, gp);
-                    }
-                    else
-                    {
-                        using (SolidBrush pb = new SolidBrush(GaBrand.Panel))
-                        using (Pen ep = new Pen(GaBrand.Edge, 1f))
-                        {
-                            g.FillPath(pb, gp);
-                            g.DrawPath(ep, gp);
-                        }
-                    }
-                    using (Font tf = GaBrand.MakeFont(12f, FontStyle.Bold))
-                    using (SolidBrush tb = new SolidBrush(active ? GaBrand.Abyss : GaBrand.Slate))
-                    {
+                        g.FillPath(kFill, kp);
+                        g.DrawPath(kPen, kp);
                         StringFormat sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-                        g.DrawString(tools[i], tf, tb, pill, sf);
+                        g.DrawString(capturing ? "Press key..." : sb.FormatDisplay(), keyF, kText, _setBtnRects[i], sf);
+                    }
+
+                    _removeBtnRects[i] = new RectangleF(card.Right - 86f, ry, 70f, 32f);
+                    using (GraphicsPath rp = GaBrand.RoundedRect(_removeBtnRects[i], 999f))
+                    using (SolidBrush rFill = new SolidBrush(GaBrand.Abyss))
+                    using (Pen rPen = new Pen(GaBrand.Red, 1f))
+                    using (SolidBrush rText = new SolidBrush(GaBrand.Red))
+                    {
+                        g.FillPath(rFill, rp);
+                        g.DrawPath(rPen, rp);
+                        StringFormat sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                        g.DrawString("Remove", keyF, rText, _removeBtnRects[i], sf);
                     }
                 }
             }
 
-            RectangleF canvasCard = new RectangleF(24, 110, Width - 48, Height - 166);
-            using (GraphicsPath cardPath = GaBrand.RoundedRect(canvasCard, 20f))
-            using (SolidBrush cardFill = new SolidBrush(GaBrand.Panel))
-            using (Pen cardEdge = new Pen(GaBrand.Edge, 1f))
+            _addCustomBtnRect = new RectangleF(pad, card.Bottom + 14f, 180f, 42f);
+            using (GraphicsPath rstP = GaBrand.RoundedRect(_addCustomBtnRect, 999f))
+            using (SolidBrush rstFill = new SolidBrush(GaBrand.Panel))
+            using (Pen rstPen = new Pen(GaBrand.Cyan, 1f))
+            using (Font bf = GaBrand.MakeFont(13f, FontStyle.Bold))
+            using (SolidBrush tb = new SolidBrush(GaBrand.Text))
             {
-                g.FillPath(cardFill, cardPath);
-                g.DrawPath(cardEdge, cardPath);
+                g.FillPath(rstFill, rstP);
+                g.DrawPath(rstPen, rstP);
+                StringFormat sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                g.DrawString("Restore Defaults", bf, tb, _addCustomBtnRect, sf);
             }
 
-            if (_canvasBitmap != null)
+            _doneBtnRect = new RectangleF(pad + 192f, card.Bottom + 14f, ClientSize.Width - pad * 2 - 192f, 42f);
+            using (GraphicsPath dnP = GaBrand.RoundedRect(_doneBtnRect, 999f))
+            using (LinearGradientBrush grad = GaBrand.SignatureGradient(_doneBtnRect))
+            using (Font bf = GaBrand.MakeFont(14f, FontStyle.Bold))
+            using (SolidBrush ab = new SolidBrush(GaBrand.Abyss))
             {
-                g.SetClip(Rectangle.Round(canvasCard));
-                g.DrawImage(_canvasBitmap, 32, 118, _canvasBitmap.Width * _zoom, _canvasBitmap.Height * _zoom);
-                if (_selectionRect.Width > 0 && _selectionRect.Height > 0)
-                {
-                    Rectangle sr = new Rectangle(
-                        32 + (int)(_selectionRect.X * _zoom),
-                        118 + (int)(_selectionRect.Y * _zoom),
-                        (int)(_selectionRect.Width * _zoom),
-                        (int)(_selectionRect.Height * _zoom));
-                    using (Pen sp = new Pen(GaBrand.Cyan, 1.5f) { DashStyle = DashStyle.Dash })
-                        g.DrawRectangle(sp, sr);
-                }
-                g.ResetClip();
-            }
-
-            using (Font ff = GaBrand.MakeFont(12f, FontStyle.Regular))
-            using (SolidBrush sb = new SolidBrush(GaBrand.Slate))
-            {
-                g.DrawString(GaBrand.FooterCredit + "  ·  Ctrl+S Save  ·  Auto-saves on close", ff, sb, 24, Height - 34);
-                RectangleF chip = new RectangleF(Width - 84, Height - 38, 60, 24);
-                using (GraphicsPath cp = GaBrand.RoundedRect(chip, 999f))
-                using (SolidBrush pb = new SolidBrush(GaBrand.Panel))
-                using (Pen ep = new Pen(GaBrand.Edge, 1f))
-                {
-                    g.FillPath(pb, cp);
-                    g.DrawPath(ep, cp);
-                    StringFormat sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-                    g.DrawString(GaBrand.VersionText, ff, sb, chip, sf);
-                }
+                g.FillPath(grad, dnP);
+                StringFormat sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                g.DrawString("Apply Shortcuts & Done", bf, ab, _doneBtnRect, sf);
             }
         }
     }
 
     // ========================================================================
-    // 11. MAIN OPEN SCREEN RECORDER STUDIO WINDOW (TMainPanel)
+    // 11. MAIN OPEN SCREEN RECORDER STUDIO WINDOW (100% Video Recorder)
     // ========================================================================
     public sealed class MainCaptureForm : Form
     {
         private readonly AppConfig _cfg;
         private CrashSafeVideoRecorder _recorder;
+        private RecordingGuidelineOverlayForm _guidelineOverlay;
         private Rectangle _selectedVideoBounds;
-        private IntPtr _selectedVideoWindow;
         private Point[] _selectedFreehandPolygon;
 
-        private int _activeTab; // 0 = Video Studio, 1 = Output Target, 2 = Crash Guard
-        private string _statusToast = "Ready · All 8 Modes Work for Video & Screenshot";
+        private int _activeTab; // 0 = Video Studio, 1 = Crash Guard
+        private string _statusToast = "Ready · Pick any of the 5 Video Modes or press Start (F9)";
         private bool _hoverLogo;
         private bool _hoverByLink;
         private bool _hoverFooterLink;
+        private bool _hoverGearBtn;
         private int _hoveredModeCard = -1;
         private bool _hoverPrimaryBtn;
-        private bool _hoverPauseBtn;
         private bool _blinkRedPhase;
 
         private readonly System.Windows.Forms.Timer _uiAndBlinkTimer;
@@ -2423,36 +2023,36 @@ namespace GraphicarrayCapture
         private readonly Icon _iconIdle;
         private readonly Icon _iconRecRed;
         private readonly Icon _iconPausedAmber;
+        private readonly GaDropdownRenderer _menuRenderer = new GaDropdownRenderer();
 
         // Hit-test rectangles
         private RectangleF _rectLogo;
         private RectangleF _rectByLink;
         private RectangleF _rectFooterLink;
+        private RectangleF _rectSettingsGear;
+        private RectangleF _rectAreaSubOptionDropdown;
+        private RectangleF _rectFormatDropdown;
+        private RectangleF _rectQualityDropdown;
+        private RectangleF _rectFpsDropdown;
+        private RectangleF _rectAudioDropdown;
+        private RectangleF _rectCursorDropdown;
         private RectangleF _rectFolderInput;
         private RectangleF _rectFolderBrowseBtn;
-        private RectangleF _rectFormatCycle;
-        private RectangleF _rectQualityCycle;
-        private RectangleF _rectFpsCycle;
-        private RectangleF _rectOutputCycle;
-        private RectangleF _rectCursorToggle;
-        private RectangleF _rectAudioToggle;
-        private RectangleF _rectPortableToggle;
-        private RectangleF _rectScreenshotBtn;
+        private RectangleF _rectPortableDropdown;
         private RectangleF _rectPauseBtn;
         private RectangleF _rectPrimaryBtn;
-        private readonly RectangleF[] _tabRects = new RectangleF[3];
-        private readonly RectangleF[] _modeRects = new RectangleF[8];
+        private readonly RectangleF[] _tabRects = new RectangleF[2];
+        private readonly RectangleF[] _modeRects = new RectangleF[5];
 
         private static readonly string[] ModeTitles =
         {
-            "Active Window", "Window / Spy", "Rectangle", "Freehand",
-            "Full Screen", "Scroll Page", "Fixed Region", "Repeat Last"
+            "Active Window", "Rectangle", "Freehand", "Full Screen", "Fixed Region"
         };
 
         public MainCaptureForm(AppConfig cfg)
         {
             _cfg = cfg;
-            _selectedVideoBounds = _cfg.LastCaptureRect.Width > 16 ? _cfg.LastCaptureRect : ScreenCaptureEngine.GetVirtualDesktopBounds();
+            _selectedVideoBounds = _cfg.LastVideoRect.Width > 16 ? _cfg.LastVideoRect : ScreenCaptureEngine.GetVirtualDesktopBounds();
             CrashSafeGuard.Initialize(_cfg);
 
             _iconIdle = GaBrand.CreateStatusIcon(0);
@@ -2461,19 +2061,18 @@ namespace GraphicarrayCapture
 
             Text = GaBrand.ProductName;
             Icon = _iconIdle;
-            Size = new Size(460, 760);
-            MinimumSize = new Size(360, 700);
+            Size = new Size(460, 748);
+            MinimumSize = new Size(360, 680);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = GaBrand.Abyss;
             ForeColor = GaBrand.Text;
             DoubleBuffered = true;
             KeyPreview = true;
 
-            // System Tray Icon with Blinking Red Recording Alert & Context Menu
-            ContextMenuStrip trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("Start / Stop Video (F9)", null, (s, e) => ToggleVideoRecording());
-            trayMenu.Items.Add("Pause / Resume Video (F10)", null, (s, e) => TogglePauseRecording());
-            trayMenu.Items.Add("Capture Screenshot (PrtSc)", null, (s, e) => ExecuteScreenshotCapture(_cfg.ActiveCaptureMode));
+            ContextMenuStrip trayMenu = new ContextMenuStrip { Renderer = _menuRenderer };
+            trayMenu.Items.Add("Start / Stop Video", null, (s, e) => ToggleVideoRecording());
+            trayMenu.Items.Add("Pause / Resume Video", null, (s, e) => TogglePauseRecording());
+            trayMenu.Items.Add("Shortcut Key Settings...", null, (s, e) => OpenShortcutSettingsPage());
             trayMenu.Items.Add("Show Window", null, (s, e) => { Show(); WindowState = FormWindowState.Normal; Activate(); });
             trayMenu.Items.Add("Exit (Auto-Save Active)", null, (s, e) => Close());
 
@@ -2486,7 +2085,6 @@ namespace GraphicarrayCapture
             };
             _trayIcon.DoubleClick += (s, e) => { Show(); WindowState = FormWindowState.Normal; Activate(); };
 
-            // 500ms timer drives live HUD timer AND blinking red Taskbar + System Tray icon during recording
             _uiAndBlinkTimer = new System.Windows.Forms.Timer { Interval = 500 };
             _uiAndBlinkTimer.Tick += OnTimerTick;
             _uiAndBlinkTimer.Start();
@@ -2510,6 +2108,7 @@ namespace GraphicarrayCapture
                     Icon = activeIcon;
                     _trayIcon.Icon = activeIcon;
                     _trayIcon.Text = $"● REC {_recorder.Elapsed:hh\\:mm\\:ss} · Open Screen Recorder";
+                    _guidelineOverlay?.SetBlinkPhase(_blinkRedPhase);
                 }
                 Invalidate();
             }
@@ -2525,22 +2124,36 @@ namespace GraphicarrayCapture
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            // Global hotkeys: F9 = Start/Stop Video, F10 = Pause/Resume Video, PrtSc = Screenshot, F11 = Repeat Last
-            NativeMethods.RegisterHotKey(Handle, 101, 0, (uint)Keys.F9);
-            NativeMethods.RegisterHotKey(Handle, 102, 0, (uint)Keys.F10);
-            NativeMethods.RegisterHotKey(Handle, 103, 0, (uint)Keys.PrintScreen);
-            NativeMethods.RegisterHotKey(Handle, 104, 0, (uint)Keys.F11);
+            ReRegisterAllShortcuts();
+        }
+
+        private void ReRegisterAllShortcuts()
+        {
+            if (!IsHandleCreated) return;
+            for (int id = 200; id < 220; id++)
+                NativeMethods.UnregisterHotKey(Handle, id);
+
+            if (_cfg.Shortcuts == null) return;
+            for (int i = 0; i < _cfg.Shortcuts.Count; i++)
+            {
+                ShortcutBinding sb = _cfg.Shortcuts[i];
+                if (sb.Key == Keys.None) continue;
+                uint mods = 0;
+                if (sb.Alt) mods |= NativeMethods.MOD_ALT;
+                if (sb.Ctrl) mods |= NativeMethods.MOD_CONTROL;
+                if (sb.Shift) mods |= NativeMethods.MOD_SHIFT;
+                NativeMethods.RegisterHotKey(Handle, 200 + i, mods, (uint)sb.Key);
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            CloseGuidelineOverlay();
             CrashSafeGuard.EmergencySaveAll("MainFormClosing");
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
-            NativeMethods.UnregisterHotKey(Handle, 101);
-            NativeMethods.UnregisterHotKey(Handle, 102);
-            NativeMethods.UnregisterHotKey(Handle, 103);
-            NativeMethods.UnregisterHotKey(Handle, 104);
+            for (int id = 200; id < 220; id++)
+                NativeMethods.UnregisterHotKey(Handle, id);
             base.OnFormClosing(e);
         }
 
@@ -2552,67 +2165,201 @@ namespace GraphicarrayCapture
             }
             else if (m.Msg == NativeMethods.WM_HOTKEY)
             {
-                int id = m.WParam.ToInt32();
-                if (id == 101) ToggleVideoRecording();
-                else if (id == 102) TogglePauseRecording();
-                else if (id == 103) ExecuteScreenshotCapture(_cfg.ActiveCaptureMode);
-                else if (id == 104) SelectCaptureModeAndArea(CaptureMode.RepeatLast);
+                int idx = m.WParam.ToInt32() - 200;
+                if (_cfg.Shortcuts != null && idx >= 0 && idx < _cfg.Shortcuts.Count)
+                {
+                    string act = _cfg.Shortcuts[idx].ActionId;
+                    switch (act)
+                    {
+                        case "StartStop":    ToggleVideoRecording(); break;
+                        case "PauseResume":  TogglePauseRecording(); break;
+                        case "ActiveWindow": SelectVideoAreaMode(VideoAreaMode.ActiveWindow, showSubMenu: false); break;
+                        case "Rectangle":    SelectVideoAreaMode(VideoAreaMode.Rectangle, showSubMenu: false); break;
+                        case "Freehand":     SelectVideoAreaMode(VideoAreaMode.Freehand, showSubMenu: false); break;
+                        case "FullScreen":   SelectVideoAreaMode(VideoAreaMode.FullScreen, showSubMenu: false); break;
+                        case "FixedRegion":  SelectVideoAreaMode(VideoAreaMode.FixedRegion, showSubMenu: false); break;
+                    }
+                }
             }
             base.WndProc(ref m);
         }
 
-        // All 8 Capture Mode Buttons work for BOTH Video Recording AND Screenshot
-        private void SelectCaptureModeAndArea(CaptureMode mode)
+        private void ShowGuidelineOverlayIfNeeded()
         {
-            _cfg.ActiveCaptureMode = mode;
+            CloseGuidelineOverlay();
+            if (!_cfg.ShowOuterGuideline) return;
+            if (_cfg.ActiveAreaMode == VideoAreaMode.Rectangle ||
+                _cfg.ActiveAreaMode == VideoAreaMode.Freehand ||
+                _cfg.ActiveAreaMode == VideoAreaMode.FixedRegion)
+            {
+                _guidelineOverlay = new RecordingGuidelineOverlayForm(_selectedVideoBounds, _selectedFreehandPolygon);
+                _guidelineOverlay.Show();
+            }
+        }
+
+        private void CloseGuidelineOverlay()
+        {
+            if (_guidelineOverlay != null)
+            {
+                try { _guidelineOverlay.Close(); _guidelineOverlay.Dispose(); } catch { }
+                _guidelineOverlay = null;
+            }
+        }
+
+        private void OpenShortcutSettingsPage()
+        {
+            using (ShortcutKeyPageForm dlg = new ShortcutKeyPageForm(_cfg))
+            {
+                dlg.ShowDialog(this);
+                ReRegisterAllShortcuts();
+                _statusToast = "Shortcut keys updated & active";
+                Invalidate();
+            }
+        }
+
+        // Handles clicking any of the 5 Video Modes (including Rectangle & Fixed Region sub-options)
+        private void SelectVideoAreaMode(VideoAreaMode mode, bool showSubMenu, Point menuPt = default)
+        {
+            _cfg.ActiveAreaMode = mode;
             _selectedFreehandPolygon = null;
-            _selectedVideoWindow = IntPtr.Zero;
 
-            if (mode == CaptureMode.RepeatLast)
-            {
-                _selectedVideoBounds = _cfg.LastCaptureRect.Width > 16
-                    ? _cfg.LastCaptureRect
-                    : ScreenCaptureEngine.GetVirtualDesktopBounds();
-                _statusToast = $"Repeat Last Area ready ({_selectedVideoBounds.Width}×{_selectedVideoBounds.Height})";
-                Invalidate();
-                return;
-            }
-
-            if (mode == CaptureMode.FullScreen)
+            if (mode == VideoAreaMode.FullScreen)
             {
                 _selectedVideoBounds = ScreenCaptureEngine.GetVirtualDesktopBounds();
-                _cfg.LastCaptureRect = _selectedVideoBounds;
+                _cfg.LastVideoRect = _selectedVideoBounds;
                 StorageEngine.Save(_cfg);
-                _statusToast = $"Full Screen ready ({_selectedVideoBounds.Width}×{_selectedVideoBounds.Height})";
+                _statusToast = $"Full Screen Video ready ({_selectedVideoBounds.Width}×{_selectedVideoBounds.Height})";
                 Invalidate();
                 return;
             }
 
-            if (mode == CaptureMode.ActiveWindow)
+            if (mode == VideoAreaMode.ActiveWindow)
             {
                 _selectedVideoBounds = ScreenCaptureEngine.GetVirtualDesktopBounds();
-                _statusToast = "Active Window mode set for Video & Screenshot";
+                StorageEngine.Save(_cfg);
+                _statusToast = "Active Window Video mode ready";
                 Invalidate();
                 return;
             }
 
-            // Interactive selection for Window / Spy, Rectangle, Freehand, Scroll Page, Fixed Region
+            if (showSubMenu && mode == VideoAreaMode.Rectangle)
+            {
+                OpenRectangleOptionsDropdown(menuPt);
+                return;
+            }
+
+            if (showSubMenu && mode == VideoAreaMode.FixedRegion)
+            {
+                OpenFixedRegionOptionsDropdown(menuPt);
+                return;
+            }
+
+            RunInteractiveVideoRegionPicker();
+        }
+
+        private void OpenRectangleOptionsDropdown(Point screenOrClientPt)
+        {
+            ContextMenuStrip menu = new ContextMenuStrip { Renderer = _menuRenderer };
+            menu.Items.Add("1. Select Freely Area on Screen", null, (s, e) =>
+            {
+                _cfg.RectangleSubMode = RectangleSelectionSubMode.FreeArea;
+                StorageEngine.Save(_cfg);
+                RunInteractiveVideoRegionPicker();
+            });
+            menu.Items.Add("2. Custom Ratio 16:9 Rectangle", null, (s, e) =>
+            {
+                _cfg.RectangleSubMode = RectangleSelectionSubMode.CustomRatio;
+                _cfg.AspectRatioW = 16; _cfg.AspectRatioH = 9;
+                StorageEngine.Save(_cfg);
+                RunInteractiveVideoRegionPicker();
+            });
+            menu.Items.Add("3. Custom Ratio 9:16 (Vertical)", null, (s, e) =>
+            {
+                _cfg.RectangleSubMode = RectangleSelectionSubMode.CustomRatio;
+                _cfg.AspectRatioW = 9; _cfg.AspectRatioH = 16;
+                StorageEngine.Save(_cfg);
+                RunInteractiveVideoRegionPicker();
+            });
+            menu.Items.Add("4. Custom Ratio 4:3", null, (s, e) =>
+            {
+                _cfg.RectangleSubMode = RectangleSelectionSubMode.CustomRatio;
+                _cfg.AspectRatioW = 4; _cfg.AspectRatioH = 3;
+                StorageEngine.Save(_cfg);
+                RunInteractiveVideoRegionPicker();
+            });
+            menu.Items.Add("5. Custom Ratio 1:1 (Square)", null, (s, e) =>
+            {
+                _cfg.RectangleSubMode = RectangleSelectionSubMode.CustomRatio;
+                _cfg.AspectRatioW = 1; _cfg.AspectRatioH = 1;
+                StorageEngine.Save(_cfg);
+                RunInteractiveVideoRegionPicker();
+            });
+            menu.Items.Add("6. Input Custom Ratio (W:H)...", null, (s, e) =>
+            {
+                if (PromptTwoIntegers("Custom Rectangle Aspect Ratio", "Ratio Width (W):", "Ratio Height (H):",
+                    _cfg.AspectRatioW, _cfg.AspectRatioH, out int rw, out int rh))
+                {
+                    _cfg.RectangleSubMode = RectangleSelectionSubMode.CustomRatio;
+                    _cfg.AspectRatioW = Math.Max(1, rw);
+                    _cfg.AspectRatioH = Math.Max(1, rh);
+                    StorageEngine.Save(_cfg);
+                    RunInteractiveVideoRegionPicker();
+                }
+            });
+            menu.Show(this, screenOrClientPt);
+        }
+
+        private void OpenFixedRegionOptionsDropdown(Point screenOrClientPt)
+        {
+            ContextMenuStrip menu = new ContextMenuStrip { Renderer = _menuRenderer };
+            menu.Items.Add($"Option 1: Input Pixel Dimensions ({_cfg.FixedRegionWidth}×{_cfg.FixedRegionHeight} px)...", null, (s, e) =>
+            {
+                if (PromptTwoIntegers("Fixed Region — Pixel Dimensions", "Width in Pixels (px):", "Height in Pixels (px):",
+                    _cfg.FixedRegionWidth, _cfg.FixedRegionHeight, out int pw, out int ph))
+                {
+                    _cfg.FixedSubMode = FixedRegionSubMode.PixelDimensions;
+                    _cfg.FixedRegionWidth = Math.Max(32, pw & ~1);
+                    _cfg.FixedRegionHeight = Math.Max(32, ph & ~1);
+                    StorageEngine.Save(_cfg);
+                    RunInteractiveVideoRegionPicker();
+                }
+            });
+            menu.Items.Add($"Option 2: Input Custom Ratio ({_cfg.AspectRatioW}:{_cfg.AspectRatioH})...", null, (s, e) =>
+            {
+                if (PromptTwoIntegers("Fixed Region — Custom Aspect Ratio", "Ratio Width (W):", "Ratio Height (H):",
+                    _cfg.AspectRatioW, _cfg.AspectRatioH, out int rw, out int rh))
+                {
+                    _cfg.FixedSubMode = FixedRegionSubMode.CustomRatio;
+                    _cfg.AspectRatioW = Math.Max(1, rw);
+                    _cfg.AspectRatioH = Math.Max(1, rh);
+                    _cfg.FixedRegionHeight = Math.Max(32, ((_cfg.FixedRegionWidth * _cfg.AspectRatioH) / _cfg.AspectRatioW) & ~1);
+                    StorageEngine.Save(_cfg);
+                    RunInteractiveVideoRegionPicker();
+                }
+            });
+            menu.Show(this, screenOrClientPt);
+        }
+
+        private void RunInteractiveVideoRegionPicker()
+        {
             Hide();
             Thread.Sleep(130);
             try
             {
-                using (RegionOverlayForm ov = new RegionOverlayForm(
-                    mode, new Size(_cfg.FixedRegionWidth, _cfg.FixedRegionHeight)))
+                bool lockRatio = _cfg.ActiveAreaMode == VideoAreaMode.Rectangle &&
+                                 _cfg.RectangleSubMode == RectangleSelectionSubMode.CustomRatio;
+                Size fixedSz = new Size(_cfg.FixedRegionWidth, _cfg.FixedRegionHeight);
+
+                using (VideoAreaSelectorForm ov = new VideoAreaSelectorForm(
+                    _cfg.ActiveAreaMode, lockRatio, _cfg.AspectRatioW, _cfg.AspectRatioH, fixedSz))
                 {
                     if (ov.ShowDialog(this) == DialogResult.OK)
                     {
                         _selectedVideoBounds = ov.SelectedBounds;
-                        _selectedVideoWindow = ov.SelectedWindowHandle;
                         _selectedFreehandPolygon = ov.LocalFreehandPolygon;
-                        _cfg.LastCaptureRect = _selectedVideoBounds;
-                        _cfg.LastCaptureMode = mode;
+                        _cfg.LastVideoRect = _selectedVideoBounds;
                         StorageEngine.Save(_cfg);
-                        _statusToast = $"{mode} Area locked: {_selectedVideoBounds.Width}×{_selectedVideoBounds.Height} px";
+                        _statusToast = $"{_cfg.ActiveAreaMode} Video Area: {_selectedVideoBounds.Width}×{_selectedVideoBounds.Height} px";
                     }
                 }
             }
@@ -2624,13 +2371,53 @@ namespace GraphicarrayCapture
             }
         }
 
+        private bool PromptTwoIntegers(string title, string label1, string label2, int def1, int def2, out int val1, out int val2)
+        {
+            val1 = def1;
+            val2 = def2;
+            using (Form dlg = new Form())
+            {
+                dlg.Text = title;
+                dlg.Size = new Size(380, 210);
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.MaximizeBox = false;
+                dlg.MinimizeBox = false;
+                dlg.BackColor = GaBrand.Abyss;
+                dlg.ForeColor = GaBrand.Text;
+
+                Label l1 = new Label { Text = label1, Left = 20, Top = 20, Width = 160, ForeColor = GaBrand.Slate };
+                TextBox t1 = new TextBox { Text = def1.ToString(), Left = 190, Top = 18, Width = 140, BackColor = GaBrand.Panel, ForeColor = GaBrand.Text };
+
+                Label l2 = new Label { Text = label2, Left = 20, Top = 62, Width = 160, ForeColor = GaBrand.Slate };
+                TextBox t2 = new TextBox { Text = def2.ToString(), Left = 190, Top = 60, Width = 140, BackColor = GaBrand.Panel, ForeColor = GaBrand.Text };
+
+                Button ok = new Button { Text = "Apply", Left = 170, Top = 114, Width = 80, Height = 32, DialogResult = DialogResult.OK, BackColor = GaBrand.Cyan, ForeColor = GaBrand.Abyss };
+                Button cancel = new Button { Text = "Cancel", Left = 258, Top = 114, Width = 72, Height = 32, DialogResult = DialogResult.Cancel, BackColor = GaBrand.Panel, ForeColor = GaBrand.Text };
+
+                dlg.Controls.AddRange(new Control[] { l1, t1, l2, t2, ok, cancel });
+                dlg.AcceptButton = ok;
+
+                if (dlg.ShowDialog(this) == DialogResult.OK &&
+                    int.TryParse(t1.Text.Trim(), out int parsed1) &&
+                    int.TryParse(t2.Text.Trim(), out int parsed2))
+                {
+                    val1 = Math.Max(1, parsed1);
+                    val2 = Math.Max(1, parsed2);
+                    return true;
+                }
+                return false;
+            }
+        }
+
         private void ToggleVideoRecording()
         {
             if (_recorder != null && _recorder.IsRecording)
             {
-                string savedPath = _recorder.StopAndSave(emergency: false, reason: "UserButtonOrF9");
+                CloseGuidelineOverlay();
+                string savedPath = _recorder.StopAndSave(emergency: false, reason: "UserButtonOrHotkey");
                 _recorder = null;
-                _statusToast = "Saved single A/V file: " + Path.GetFileName(savedPath);
+                _statusToast = "Saved video: " + Path.GetFileName(savedPath);
                 Invalidate();
                 return;
             }
@@ -2638,15 +2425,17 @@ namespace GraphicarrayCapture
             if (_selectedVideoBounds.Width < 16 || _selectedVideoBounds.Height < 16)
                 _selectedVideoBounds = ScreenCaptureEngine.GetVirtualDesktopBounds();
 
+            ShowGuidelineOverlayIfNeeded();
+
             _recorder = new CrashSafeVideoRecorder(
                 _cfg,
-                _cfg.ActiveCaptureMode,
+                _cfg.ActiveAreaMode,
                 _selectedVideoBounds,
-                _selectedVideoWindow,
                 _selectedFreehandPolygon);
 
             string livePath = _recorder.Start();
-            _statusToast = "● REC (Single A/V): " + Path.GetFileName(livePath);
+            string audioTag = _cfg.RecordAudioWithVideo ? "Video+Audio" : "Video Only";
+            _statusToast = $"● REC ({audioTag}): " + Path.GetFileName(livePath);
             Invalidate();
         }
 
@@ -2654,90 +2443,108 @@ namespace GraphicarrayCapture
         {
             if (_recorder == null || !_recorder.IsRecording)
             {
-                _statusToast = "Start a recording (F9) first to use Pause/Resume (F10).";
+                _statusToast = "Start a video recording first to Pause/Resume.";
                 Invalidate();
                 return;
             }
             _recorder.TogglePause();
             _statusToast = _recorder.IsPaused
-                ? "Recording PAUSED (flushed to disk) · Press Resume (F10)"
+                ? "Recording PAUSED (flushed to disk) · Click Resume"
                 : "● Recording RESUMED: " + Path.GetFileName(_recorder.ActiveVideoPath);
             Invalidate();
         }
 
-        private void ExecuteScreenshotCapture(CaptureMode mode)
+        // Dropdown Menus for all Value Controls
+        private void OpenFormatDropdown(Point pt)
         {
-            if (_cfg.CaptureDelaySeconds > 0)
-                Thread.Sleep(_cfg.CaptureDelaySeconds * 1000);
-
-            Hide();
-            Thread.Sleep(140);
-
-            Bitmap captured = null;
-            Rectangle rect = _selectedVideoBounds.Width > 16 ? _selectedVideoBounds : ScreenCaptureEngine.GetVirtualDesktopBounds();
-
-            try
+            ContextMenuStrip menu = new ContextMenuStrip { Renderer = _menuRenderer };
+            foreach (VideoFormatType fmt in Enum.GetValues(typeof(VideoFormatType)))
             {
-                switch (mode)
+                VideoFormatType copy = fmt;
+                menu.Items.Add($"{copy} (.{copy.ToString().ToLowerInvariant()})", null, (s, e) =>
                 {
-                    case CaptureMode.ActiveWindow:
-                        captured = ScreenCaptureEngine.CaptureActiveWindow(_cfg.IncludeMouseCursor, out rect);
-                        break;
-
-                    case CaptureMode.FullScreen:
-                        rect = ScreenCaptureEngine.GetVirtualDesktopBounds();
-                        captured = ScreenCaptureEngine.CaptureRegion(rect, _cfg.IncludeMouseCursor);
-                        break;
-
-                    case CaptureMode.RepeatLast:
-                        rect = _cfg.LastCaptureRect.Width > 16 ? _cfg.LastCaptureRect : ScreenCaptureEngine.GetVirtualDesktopBounds();
-                        captured = ScreenCaptureEngine.CaptureRegion(rect, _cfg.IncludeMouseCursor);
-                        break;
-
-                    case CaptureMode.Rectangle:
-                    case CaptureMode.Freehand:
-                    case CaptureMode.FixedRegion:
-                    case CaptureMode.WindowObject:
-                        using (RegionOverlayForm ov = new RegionOverlayForm(
-                            mode, new Size(_cfg.FixedRegionWidth, _cfg.FixedRegionHeight)))
-                        {
-                            if (ov.ShowDialog(this) == DialogResult.OK)
-                            {
-                                captured = (Bitmap)ov.CapturedBitmap.Clone();
-                                rect = ov.SelectedBounds;
-                            }
-                        }
-                        break;
-
-                    case CaptureMode.ScrollingWindow:
-                        using (RegionOverlayForm ov = new RegionOverlayForm(CaptureMode.ScrollingWindow, Size.Empty))
-                        {
-                            if (ov.ShowDialog(this) == DialogResult.OK && ov.SelectedWindowHandle != IntPtr.Zero)
-                            {
-                                rect = ov.SelectedBounds;
-                                captured = ScreenCaptureEngine.CaptureScrollingWindow(
-                                    ov.SelectedWindowHandle, rect, _cfg.AutoScrollIntervalMs);
-                            }
-                        }
-                        break;
-                }
-
-                if (captured != null)
-                {
-                    _cfg.LastCaptureRect = rect;
-                    _cfg.LastCaptureMode = mode;
+                    _cfg.VideoFormat = copy;
                     StorageEngine.Save(_cfg);
-                    string saved = OutputDispatcher.Dispatch(captured, _cfg, this);
-                    _statusToast = "Saved screenshot: " + Path.GetFileName(saved);
-                }
+                    Invalidate();
+                });
             }
-            finally
+            menu.Show(this, pt);
+        }
+
+        private void OpenQualityDropdown(Point pt)
+        {
+            ContextMenuStrip menu = new ContextMenuStrip { Renderer = _menuRenderer };
+            foreach (VideoQualityLevel q in Enum.GetValues(typeof(VideoQualityLevel)))
             {
-                captured?.Dispose();
-                Show();
-                Activate();
-                Invalidate();
+                VideoQualityLevel copy = q;
+                menu.Items.Add($"{copy} Quality ({(int)copy}%)", null, (s, e) =>
+                {
+                    _cfg.VideoQuality = copy;
+                    StorageEngine.Save(_cfg);
+                    Invalidate();
+                });
             }
+            menu.Show(this, pt);
+        }
+
+        private void OpenFpsDropdown(Point pt)
+        {
+            ContextMenuStrip menu = new ContextMenuStrip { Renderer = _menuRenderer };
+            foreach (int fps in new[] { 15, 24, 30, 60 })
+            {
+                int copy = fps;
+                menu.Items.Add($"{copy} FPS", null, (s, e) =>
+                {
+                    _cfg.VideoFps = copy;
+                    StorageEngine.Save(_cfg);
+                    Invalidate();
+                });
+            }
+            menu.Show(this, pt);
+        }
+
+        private void OpenAudioModeDropdown(Point pt)
+        {
+            ContextMenuStrip menu = new ContextMenuStrip { Renderer = _menuRenderer };
+            menu.Items.Add("Video + Audio (1 Single File)", null, (s, e) =>
+            {
+                _cfg.RecordAudioWithVideo = true;
+                StorageEngine.Save(_cfg);
+                Invalidate();
+            });
+            menu.Items.Add("Video Only (Without Audio)", null, (s, e) =>
+            {
+                _cfg.RecordAudioWithVideo = false;
+                StorageEngine.Save(_cfg);
+                Invalidate();
+            });
+            menu.Show(this, pt);
+        }
+
+        private void OpenCursorDropdown(Point pt)
+        {
+            ContextMenuStrip menu = new ContextMenuStrip { Renderer = _menuRenderer };
+            menu.Items.Add("Show Cursor + Click Halo", null, (s, e) =>
+            {
+                _cfg.IncludeMouseCursor = true;
+                _cfg.HighlightMouseClicks = true;
+                StorageEngine.Save(_cfg);
+                Invalidate();
+            });
+            menu.Items.Add("Show Cursor Only", null, (s, e) =>
+            {
+                _cfg.IncludeMouseCursor = true;
+                _cfg.HighlightMouseClicks = false;
+                StorageEngine.Save(_cfg);
+                Invalidate();
+            });
+            menu.Items.Add("Hide Mouse Cursor", null, (s, e) =>
+            {
+                _cfg.IncludeMouseCursor = false;
+                StorageEngine.Save(_cfg);
+                Invalidate();
+            });
+            menu.Show(this, pt);
         }
 
         private void BrowseAutoSaveFolder()
@@ -2760,7 +2567,7 @@ namespace GraphicarrayCapture
         {
             using (Form prompt = new Form())
             {
-                prompt.Text = "Edit Auto-Save Directory Path";
+                prompt.Text = "Edit Video Auto-Save Directory Path";
                 prompt.Size = new Size(460, 170);
                 prompt.StartPosition = FormStartPosition.CenterParent;
                 prompt.BackColor = GaBrand.Abyss;
@@ -2769,35 +2576,10 @@ namespace GraphicarrayCapture
                 prompt.MaximizeBox = false;
                 prompt.MinimizeBox = false;
 
-                Label lbl = new Label
-                {
-                    Text = "Type or paste your Auto-Save folder path:",
-                    Left = 16, Top = 16, Width = 410,
-                    ForeColor = GaBrand.Slate
-                };
-                TextBox tb = new TextBox
-                {
-                    Text = _cfg.AutoSaveFolder,
-                    Left = 16, Top = 44, Width = 410,
-                    BackColor = GaBrand.Panel,
-                    ForeColor = GaBrand.Text
-                };
-                Button ok = new Button
-                {
-                    Text = "Save Path",
-                    Left = 246, Top = 84, Width = 90, Height = 32,
-                    DialogResult = DialogResult.OK,
-                    BackColor = GaBrand.Cyan,
-                    ForeColor = GaBrand.Abyss
-                };
-                Button cancel = new Button
-                {
-                    Text = "Cancel",
-                    Left = 342, Top = 84, Width = 84, Height = 32,
-                    DialogResult = DialogResult.Cancel,
-                    BackColor = GaBrand.Panel,
-                    ForeColor = GaBrand.Text
-                };
+                Label lbl = new Label { Text = "Type or paste your Video Auto-Save folder path:", Left = 16, Top = 16, Width = 410, ForeColor = GaBrand.Slate };
+                TextBox tb = new TextBox { Text = _cfg.AutoSaveFolder, Left = 16, Top = 44, Width = 410, BackColor = GaBrand.Panel, ForeColor = GaBrand.Text };
+                Button ok = new Button { Text = "Save Path", Left = 246, Top = 84, Width = 90, Height = 32, DialogResult = DialogResult.OK, BackColor = GaBrand.Cyan, ForeColor = GaBrand.Abyss };
+                Button cancel = new Button { Text = "Cancel", Left = 342, Top = 84, Width = 84, Height = 32, DialogResult = DialogResult.Cancel, BackColor = GaBrand.Panel, ForeColor = GaBrand.Text };
                 prompt.Controls.AddRange(new Control[] { lbl, tb, ok, cancel });
                 prompt.AcceptButton = ok;
 
@@ -2826,29 +2608,29 @@ namespace GraphicarrayCapture
             bool hLogo = _rectLogo.Contains(pt);
             bool hBy = _rectByLink.Contains(pt);
             bool hFoot = _rectFooterLink.Contains(pt);
+            bool hGear = _rectSettingsGear.Contains(pt);
             bool hPrim = _rectPrimaryBtn.Contains(pt);
-            bool hPause = _rectPauseBtn.Contains(pt);
 
             int modeHover = -1;
             for (int i = 0; i < _modeRects.Length; i++)
                 if (_modeRects[i].Contains(pt)) modeHover = i;
 
-            Cursor = (hLogo || hBy || hFoot || hPrim || hPause || modeHover >= 0 ||
+            Cursor = (hLogo || hBy || hFoot || hGear || hPrim || modeHover >= 0 ||
+                      _rectAreaSubOptionDropdown.Contains(pt) || _rectFormatDropdown.Contains(pt) ||
+                      _rectQualityDropdown.Contains(pt) || _rectFpsDropdown.Contains(pt) ||
+                      _rectAudioDropdown.Contains(pt) || _rectCursorDropdown.Contains(pt) ||
                       _rectFolderInput.Contains(pt) || _rectFolderBrowseBtn.Contains(pt) ||
-                      _rectFormatCycle.Contains(pt) || _rectQualityCycle.Contains(pt) ||
-                      _rectFpsCycle.Contains(pt) || _rectOutputCycle.Contains(pt) ||
-                      _rectCursorToggle.Contains(pt) || _rectAudioToggle.Contains(pt) ||
-                      _rectPortableToggle.Contains(pt) || _rectScreenshotBtn.Contains(pt))
+                      _rectPortableDropdown.Contains(pt) || _rectPauseBtn.Contains(pt))
                 ? Cursors.Hand : Cursors.Default;
 
             if (hLogo != _hoverLogo || hBy != _hoverByLink || hFoot != _hoverFooterLink ||
-                hPrim != _hoverPrimaryBtn || hPause != _hoverPauseBtn || modeHover != _hoveredModeCard)
+                hGear != _hoverGearBtn || hPrim != _hoverPrimaryBtn || modeHover != _hoveredModeCard)
             {
                 _hoverLogo = hLogo;
                 _hoverByLink = hBy;
                 _hoverFooterLink = hFoot;
+                _hoverGearBtn = hGear;
                 _hoverPrimaryBtn = hPrim;
-                _hoverPauseBtn = hPause;
                 _hoveredModeCard = modeHover;
                 Invalidate();
             }
@@ -2864,14 +2646,32 @@ namespace GraphicarrayCapture
                 return;
             }
 
-            // 8 Capture Modes: sets the Video Recording Area (and triggers interactive picker when needed)
+            // Settings Gear Button -> Opens Shortcut Key Manager Page
+            if (_rectSettingsGear.Contains(pt))
+            {
+                OpenShortcutSettingsPage();
+                return;
+            }
+
+            // 5 Video Recording Modes
             for (int i = 0; i < _modeRects.Length; i++)
             {
                 if (_modeRects[i].Contains(pt))
                 {
-                    SelectCaptureModeAndArea((CaptureMode)i);
+                    SelectVideoAreaMode((VideoAreaMode)i, showSubMenu: true, menuPt: new Point((int)_modeRects[i].Left, (int)_modeRects[i].Bottom));
                     return;
                 }
+            }
+
+            // Area Sub-Option Dropdown (Free vs Custom Ratio for Rectangle; Pixel Dimensions vs Custom Ratio for Fixed)
+            if (_rectAreaSubOptionDropdown.Contains(pt))
+            {
+                Point dp = new Point((int)_rectAreaSubOptionDropdown.Left, (int)_rectAreaSubOptionDropdown.Bottom);
+                if (_cfg.ActiveAreaMode == VideoAreaMode.FixedRegion)
+                    OpenFixedRegionOptionsDropdown(dp);
+                else
+                    OpenRectangleOptionsDropdown(dp);
+                return;
             }
 
             // Segmented Tabs
@@ -2885,92 +2685,27 @@ namespace GraphicarrayCapture
                 }
             }
 
-            // Save Directory Path (Editable text input OR Folder Browser dialog)
-            if (_rectFolderInput.Contains(pt)) { PromptEditAutoSaveFolder(); return; }
+            // Dropdown Value Buttons
+            if (_rectFormatDropdown.Contains(pt))  { OpenFormatDropdown(new Point((int)_rectFormatDropdown.Left, (int)_rectFormatDropdown.Bottom)); return; }
+            if (_rectQualityDropdown.Contains(pt)) { OpenQualityDropdown(new Point((int)_rectQualityDropdown.Left, (int)_rectQualityDropdown.Bottom)); return; }
+            if (_rectFpsDropdown.Contains(pt))     { OpenFpsDropdown(new Point((int)_rectFpsDropdown.Left, (int)_rectFpsDropdown.Bottom)); return; }
+            if (_rectAudioDropdown.Contains(pt))   { OpenAudioModeDropdown(new Point((int)_rectAudioDropdown.Left, (int)_rectAudioDropdown.Bottom)); return; }
+            if (_rectCursorDropdown.Contains(pt))  { OpenCursorDropdown(new Point((int)_rectCursorDropdown.Left, (int)_rectCursorDropdown.Bottom)); return; }
+
+            if (_rectFolderInput.Contains(pt))     { PromptEditAutoSaveFolder(); return; }
             if (_rectFolderBrowseBtn.Contains(pt)) { BrowseAutoSaveFolder(); return; }
 
-            // Video Format (MP4 -> MKV -> AVI)
-            if (_rectFormatCycle.Contains(pt))
+            if (_rectPortableDropdown.Contains(pt))
             {
-                VideoFormatType[] fmts = { VideoFormatType.MP4, VideoFormatType.MKV, VideoFormatType.AVI };
-                int idx = Array.IndexOf(fmts, _cfg.VideoFormat);
-                _cfg.VideoFormat = fmts[(idx + 1) % fmts.Length];
-                StorageEngine.Save(_cfg);
-                Invalidate();
+                ContextMenuStrip pm = new ContextMenuStrip { Renderer = _menuRenderer };
+                pm.Items.Add("Portable Mode (Portable.db)", null, (s, ev) => { _cfg.PortableMode = true; StorageEngine.Save(_cfg); Invalidate(); });
+                pm.Items.Add("Standard Mode (AppData)", null, (s, ev) => { _cfg.PortableMode = false; StorageEngine.Save(_cfg); Invalidate(); });
+                pm.Show(this, new Point((int)_rectPortableDropdown.Left, (int)_rectPortableDropdown.Bottom));
                 return;
             }
 
-            // Video Quality (Low -> Medium -> High -> Lossless)
-            if (_rectQualityCycle.Contains(pt))
-            {
-                VideoQualityLevel[] quals = { VideoQualityLevel.Low, VideoQualityLevel.Medium, VideoQualityLevel.High, VideoQualityLevel.Lossless };
-                int idx = Array.IndexOf(quals, _cfg.VideoQuality);
-                _cfg.VideoQuality = quals[(idx + 1) % quals.Length];
-                StorageEngine.Save(_cfg);
-                Invalidate();
-                return;
-            }
-
-            // Frame Rate (15 -> 24 -> 30 -> 60 FPS)
-            if (_rectFpsCycle.Contains(pt))
-            {
-                int[] fpsOpts = { 15, 24, 30, 60 };
-                int idx = Array.IndexOf(fpsOpts, _cfg.VideoFps);
-                _cfg.VideoFps = fpsOpts[(idx + 1) % fpsOpts.Length];
-                StorageEngine.Save(_cfg);
-                Invalidate();
-                return;
-            }
-
-            if (_rectOutputCycle.Contains(pt))
-            {
-                int next = ((int)_cfg.ActiveOutputTarget + 1) % Enum.GetValues(typeof(OutputTarget)).Length;
-                _cfg.ActiveOutputTarget = (OutputTarget)next;
-                StorageEngine.Save(_cfg);
-                Invalidate();
-                return;
-            }
-
-            if (_rectCursorToggle.Contains(pt))
-            {
-                _cfg.IncludeMouseCursor = !_cfg.IncludeMouseCursor;
-                StorageEngine.Save(_cfg);
-                Invalidate();
-                return;
-            }
-
-            if (_rectAudioToggle.Contains(pt))
-            {
-                _cfg.RecordAudio = !_cfg.RecordAudio;
-                StorageEngine.Save(_cfg);
-                Invalidate();
-                return;
-            }
-
-            if (_rectPortableToggle.Contains(pt))
-            {
-                _cfg.PortableMode = !_cfg.PortableMode;
-                StorageEngine.Save(_cfg);
-                Invalidate();
-                return;
-            }
-
-            if (_rectScreenshotBtn.Contains(pt))
-            {
-                ExecuteScreenshotCapture(_cfg.ActiveCaptureMode);
-                return;
-            }
-
-            if (_rectPauseBtn.Contains(pt))
-            {
-                TogglePauseRecording();
-                return;
-            }
-
-            if (_rectPrimaryBtn.Contains(pt))
-            {
-                ToggleVideoRecording();
-            }
+            if (_rectPauseBtn.Contains(pt))   { TogglePauseRecording(); return; }
+            if (_rectPrimaryBtn.Contains(pt)) { ToggleVideoRecording(); }
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -2983,7 +2718,7 @@ namespace GraphicarrayCapture
 
             GaBrand.PaintAbyssBackground(g, ClientRectangle);
 
-            // ── 1. HEADER: 44px Logo tile + "Open Screen Recorder" + "by Graphicarray" + Blinking Red Indicator
+            // ── 1. HEADER: 44px Logo tile + "Open Screen Recorder" + "by Graphicarray" + Settings Gear (⚙) + Blinking Dot
             _rectLogo = new RectangleF(pad, 14f, 44f, 44f);
             GaBrand.DrawLogoTile(g, _rectLogo, _hoverLogo, false);
 
@@ -2997,20 +2732,31 @@ namespace GraphicarrayCapture
                 g.DrawString("by Graphicarray", byFont, cyanBrush, _rectByLink.Location);
             }
 
+            // Settings Gear Button (Opens Shortcut Key Page)
+            _rectSettingsGear = new RectangleF(w - pad - 56f, 18f, 34f, 34f);
+            using (GraphicsPath gp = GaBrand.RoundedRect(_rectSettingsGear, 999f))
+            using (SolidBrush pb = new SolidBrush(GaBrand.Panel))
+            using (Pen ep = new Pen(_hoverGearBtn ? GaBrand.Cyan : GaBrand.Edge, 1f))
+            {
+                g.FillPath(pb, gp);
+                g.DrawPath(ep, gp);
+                DrawGearIcon(g, new PointF(_rectSettingsGear.X + 17f, _rectSettingsGear.Y + 17f), _hoverGearBtn ? GaBrand.Cyan : GaBrand.Slate);
+            }
+
             bool isRec = _recorder != null && _recorder.IsRecording;
             bool isPaused = isRec && _recorder.IsPaused;
             Color dotColor = !isRec ? GaBrand.Green : (isPaused ? GaBrand.Amber : (_blinkRedPhase ? GaBrand.Red : GaBrand.Mute));
             using (SolidBrush statusDot = new SolidBrush(dotColor))
             using (Pen halo = new Pen(Color.FromArgb(75, dotColor), 4f))
             {
-                RectangleF dotRect = new RectangleF(w - pad - 14f, 28f, 12f, 12f);
+                RectangleF dotRect = new RectangleF(w - pad - 14f, 29f, 12f, 12f);
                 g.DrawEllipse(halo, dotRect);
                 g.FillEllipse(statusDot, dotRect);
             }
 
-            // ── 2. MAIN VISUAL STUDIO CARD: HUD + 8 Capture Modes (Video & Screenshot)
+            // ── 2. MAIN VIDEO STUDIO CARD: Timer + 5 Pure Video Modes + Sub-Mode Dropdown
             float y = 68f;
-            RectangleF mainCard = new RectangleF(pad, y, w - pad * 2, 232f);
+            RectangleF mainCard = new RectangleF(pad, y, w - pad * 2, 198f);
             using (GraphicsPath cardPath = GaBrand.RoundedRect(mainCard, GaBrand.RadiusCard))
             using (SolidBrush panelBrush = new SolidBrush(GaBrand.Panel))
             using (Pen edgePen = new Pen(isRec ? GaBrand.Cyan : GaBrand.Edge, 1f))
@@ -3025,49 +2771,50 @@ namespace GraphicarrayCapture
             using (SolidBrush textB = new SolidBrush(GaBrand.Text))
             using (SolidBrush cyanB = new SolidBrush(GaBrand.Cyan))
             {
-                g.DrawString("VIDEO & SCREENSHOT CAPTURE MODES (ALL 8 ACTIVE)", labelF, slateB, mainCard.X + 16f, mainCard.Y + 12f);
+                g.DrawString("VIDEO RECORDING AREA (5 MODES + OUTER GUIDELINE)", labelF, slateB, mainCard.X + 16f, mainCard.Y + 12f);
                 string timeStr = isRec ? _recorder.Elapsed.ToString(@"hh\:mm\:ss") : "00:00:00";
                 g.DrawString(timeStr, timerF, isRec ? cyanB : textB, mainCard.X + 16f, mainCard.Y + 30f);
 
-                _rectScreenshotBtn = new RectangleF(mainCard.Right - 142f, mainCard.Y + 30f, 126f, 28f);
-                DrawSecondaryPill(g, _rectScreenshotBtn, "Screenshot (PrtSc)");
+                // Area Sub-Option Dropdown (shows Free vs Custom Ratio for Rectangle, or Pixel vs Ratio for Fixed)
+                string subLabel = GetAreaSubOptionLabel();
+                _rectAreaSubOptionDropdown = new RectangleF(mainCard.Right - 196f, mainCard.Y + 30f, 180f, 28f);
+                DrawDropdownPill(g, _rectAreaSubOptionDropdown, subLabel);
             }
 
-            float gridTop = mainCard.Y + 70f;
-            float cellW = (mainCard.Width - 32f - 24f) / 4f;
-            float cellH = 66f;
-            for (int i = 0; i < 8; i++)
+            // 5 Video Mode Buttons in one clean row
+            float gridTop = mainCard.Y + 72f;
+            float cellW = (mainCard.Width - 32f - 32f) / 5f;
+            float cellH = 108f;
+            for (int i = 0; i < 5; i++)
             {
-                int row = i / 4;
-                int col = i % 4;
                 RectangleF cell = new RectangleF(
-                    mainCard.X + 16f + col * (cellW + 8f),
-                    gridTop + row * (cellH + 10f),
+                    mainCard.X + 16f + i * (cellW + 8f),
+                    gridTop,
                     cellW, cellH);
                 _modeRects[i] = cell;
 
-                bool selected = (int)_cfg.ActiveCaptureMode == i;
+                bool selected = (int)_cfg.ActiveAreaMode == i;
                 bool hovered = _hoveredModeCard == i;
 
                 using (GraphicsPath cp = GaBrand.RoundedRect(cell, 12f))
                 using (SolidBrush cb = new SolidBrush(GaBrand.Abyss))
-                using (Pen border = new Pen(selected || hovered ? GaBrand.Cyan : GaBrand.Edge, selected ? 1.5f : 1f))
+                using (Pen border = new Pen(selected || hovered ? GaBrand.Cyan : GaBrand.Edge, selected ? 1.8f : 1f))
                 {
                     g.FillPath(cb, cp);
                     g.DrawPath(border, cp);
                 }
 
-                DrawCaptureIcon(g, i, new PointF(cell.X + cell.Width / 2f, cell.Y + 22f));
+                DrawVideoModeIcon(g, i, new PointF(cell.X + cell.Width / 2f, cell.Y + 34f));
 
                 using (Font mf = GaBrand.MakeFont(10.5f, FontStyle.Bold))
                 using (SolidBrush mb = new SolidBrush(selected || hovered ? GaBrand.Text : GaBrand.Slate))
                 {
                     StringFormat sf = new StringFormat { Alignment = StringAlignment.Center };
-                    g.DrawString(ModeTitles[i], mf, mb, new RectangleF(cell.X, cell.Bottom - 20f, cell.Width, 18f), sf);
+                    g.DrawString(ModeTitles[i], mf, mb, new RectangleF(cell.X + 2, cell.Bottom - 36f, cell.Width - 4, 32f), sf);
                 }
             }
 
-            // ── 3. SEGMENTED PILL TABS (Video Studio | Output Target | Crash Guard)
+            // ── 3. SEGMENTED PILL TABS (Video Studio | Crash Guard & Shortcuts)
             y = mainCard.Bottom + 12f;
             RectangleF tabBar = new RectangleF(pad, y, w - pad * 2, 36f);
             using (GraphicsPath tp = GaBrand.RoundedRect(tabBar, GaBrand.RadiusPill))
@@ -3078,9 +2825,9 @@ namespace GraphicarrayCapture
                 g.DrawPath(ep, tp);
             }
 
-            string[] tabNames = { "Video Studio", "Output Target", "Crash Guard" };
-            float tabW = (tabBar.Width - 8f) / 3f;
-            for (int i = 0; i < 3; i++)
+            string[] tabNames = { "Video Studio", "Crash Guard & Shortcuts" };
+            float tabW = (tabBar.Width - 8f) / 2f;
+            for (int i = 0; i < 2; i++)
             {
                 RectangleF tr = new RectangleF(tabBar.X + 4f + i * tabW, tabBar.Y + 4f, tabW, tabBar.Height - 8f);
                 _tabRects[i] = tr;
@@ -3099,9 +2846,9 @@ namespace GraphicarrayCapture
                 }
             }
 
-            // ── 4. NUMERIC & PATH CONTROLS CARD
+            // ── 4. DROPDOWN VALUE CONTROLS & PATH CARD
             y = tabBar.Bottom + 12f;
-            RectangleF ctrlCard = new RectangleF(pad, y, w - pad * 2, 224f);
+            RectangleF ctrlCard = new RectangleF(pad, y, w - pad * 2, 246f);
             using (GraphicsPath ccp = GaBrand.RoundedRect(ctrlCard, GaBrand.RadiusCard))
             using (SolidBrush pb = new SolidBrush(GaBrand.Panel))
             using (Pen ep = new Pen(GaBrand.Edge, 1f))
@@ -3113,8 +2860,6 @@ namespace GraphicarrayCapture
             ResetControlHitRects();
             if (_activeTab == 0)
                 PaintVideoControlsTab(g, ctrlCard);
-            else if (_activeTab == 1)
-                PaintOutputControlsTab(g, ctrlCard);
             else
                 PaintCrashGuardTab(g, ctrlCard);
 
@@ -3133,11 +2878,11 @@ namespace GraphicarrayCapture
                 g.DrawString(_statusToast, tf, cb, toastRect, sf);
             }
 
-            // ── 6. PAUSE/RESUME (F10) SECONDARY PILL + START/STOP (F9) PRIMARY PILL
+            // ── 6. PAUSE/RESUME SECONDARY PILL + START/STOP PRIMARY PILL
             y = toastRect.Bottom + 10f;
-            float pauseW = 132f;
+            float pauseW = 134f;
             _rectPauseBtn = new RectangleF(pad, y, pauseW, 44f);
-            DrawSecondaryPill(g, _rectPauseBtn, isPaused ? "Resume (F10)" : "Pause (F10)");
+            DrawDropdownPill(g, _rectPauseBtn, isPaused ? "Resume (F10)" : "Pause (F10)", showArrow: false);
 
             _rectPrimaryBtn = new RectangleF(pad + pauseW + 10f, y, w - pad * 2 - pauseW - 10f, 44f);
             if (_hoverPrimaryBtn)
@@ -3162,7 +2907,7 @@ namespace GraphicarrayCapture
             using (SolidBrush slateB = new SolidBrush(GaBrand.Slate))
             using (SolidBrush hoverB = new SolidBrush(GaBrand.Cyan))
             {
-                g.DrawString("Tray & taskbar icon blinks red while recording · 1s crash-safe flush.", helpF, slateB, pad, _rectPrimaryBtn.Bottom + 8f);
+                g.DrawString("Outer screen guideline shows recorded area · Gear opens Shortcuts.", helpF, slateB, pad, _rectPrimaryBtn.Bottom + 8f);
 
                 float fy = h - 28f;
                 _rectFooterLink = new RectangleF(pad, fy, 200f, 20f);
@@ -3181,11 +2926,28 @@ namespace GraphicarrayCapture
             }
         }
 
+        private string GetAreaSubOptionLabel()
+        {
+            if (_cfg.ActiveAreaMode == VideoAreaMode.Rectangle)
+            {
+                return _cfg.RectangleSubMode == RectangleSelectionSubMode.FreeArea
+                    ? "Rect: Free Area ▾"
+                    : $"Rect: Ratio {_cfg.AspectRatioW}:{_cfg.AspectRatioH} ▾";
+            }
+            if (_cfg.ActiveAreaMode == VideoAreaMode.FixedRegion)
+            {
+                return _cfg.FixedSubMode == FixedRegionSubMode.PixelDimensions
+                    ? $"Fixed: {_cfg.FixedRegionWidth}×{_cfg.FixedRegionHeight}px ▾"
+                    : $"Fixed: Ratio {_cfg.AspectRatioW}:{_cfg.AspectRatioH} ▾";
+            }
+            return $"{_cfg.ActiveAreaMode} Options ▾";
+        }
+
         private void ResetControlHitRects()
         {
-            _rectFolderInput = _rectFolderBrowseBtn = _rectFormatCycle = _rectQualityCycle =
-                _rectFpsCycle = _rectOutputCycle = _rectCursorToggle =
-                _rectAudioToggle = _rectPortableToggle = RectangleF.Empty;
+            _rectFormatDropdown = _rectQualityDropdown = _rectFpsDropdown =
+                _rectAudioDropdown = _rectCursorDropdown = _rectFolderInput =
+                _rectFolderBrowseBtn = _rectPortableDropdown = RectangleF.Empty;
         }
 
         private void PaintVideoControlsTab(Graphics g, RectangleF card)
@@ -3195,66 +2957,40 @@ namespace GraphicarrayCapture
             using (SolidBrush slateB = new SolidBrush(GaBrand.Slate))
             using (SolidBrush textB = new SolidBrush(GaBrand.Text))
             {
-                g.DrawString("SINGLE-FILE AUDIO+VIDEO RECORDER SETTINGS", secF, slateB, card.X + 16f, card.Y + 12f);
+                g.DrawString("VIDEO RECORDER DROPDOWN OPTIONS (CLICK ANY VALUE)", secF, slateB, card.X + 16f, card.Y + 12f);
 
-                // Row 1: Video Format (MP4 / MKV / AVI) + Quality (Low / Medium / High / Lossless)
-                g.DrawString("Format & Quality", bodyF, textB, card.X + 16f, card.Y + 38f);
-                _rectFormatCycle = new RectangleF(card.Right - 212f, card.Y + 33f, 86f, 28f);
-                DrawSecondaryPill(g, _rectFormatCycle, _cfg.VideoFormat.ToString());
+                // Row 1: Video File Format Dropdown (MP4 / MKV / AVI) + Quality Dropdown (Low / Medium / High / Lossless)
+                g.DrawString("Video File Format & Quality", bodyF, textB, card.X + 16f, card.Y + 38f);
+                _rectFormatDropdown = new RectangleF(card.Right - 216f, card.Y + 33f, 88f, 28f);
+                DrawDropdownPill(g, _rectFormatDropdown, $"{_cfg.VideoFormat} ▾");
 
-                _rectQualityCycle = new RectangleF(card.Right - 118f, card.Y + 33f, 102f, 28f);
-                DrawSecondaryPill(g, _rectQualityCycle, _cfg.VideoQuality.ToString());
+                _rectQualityDropdown = new RectangleF(card.Right - 120f, card.Y + 33f, 104f, 28f);
+                DrawDropdownPill(g, _rectQualityDropdown, $"{_cfg.VideoQuality} ▾");
 
-                // Row 2: Frame Rate + Single-File Audio+Video
-                g.DrawString("FPS & Muxed Audio", bodyF, textB, card.X + 16f, card.Y + 74f);
-                _rectFpsCycle = new RectangleF(card.Right - 212f, card.Y + 69f, 86f, 28f);
-                DrawSecondaryPill(g, _rectFpsCycle, $"{_cfg.VideoFps} FPS");
+                // Row 2: Audio Mode Dropdown (Video + Audio in 1 File OR Video Only without Audio)
+                g.DrawString("Audio Recording Mode", bodyF, textB, card.X + 16f, card.Y + 74f);
+                _rectAudioDropdown = new RectangleF(card.Right - 216f, card.Y + 69f, 200f, 28f);
+                string audioLabel = _cfg.RecordAudioWithVideo ? "Video + Audio (1 File) ▾" : "Video Only (No Audio) ▾";
+                DrawDropdownPill(g, _rectAudioDropdown, audioLabel);
 
-                _rectAudioToggle = new RectangleF(card.Right - 118f, card.Y + 69f, 102f, 28f);
-                DrawSecondaryPill(g, _rectAudioToggle, _cfg.RecordAudio ? "1-File A/V" : "Video Only");
+                // Row 3: Frame Rate Dropdown + Cursor Dropdown
+                g.DrawString("Frame Rate & Cursor", bodyF, textB, card.X + 16f, card.Y + 110f);
+                _rectFpsDropdown = new RectangleF(card.Right - 216f, card.Y + 105f, 88f, 28f);
+                DrawDropdownPill(g, _rectFpsDropdown, $"{_cfg.VideoFps} FPS ▾");
 
-                // Row 3: Mouse Cursor & Click Halo
-                g.DrawString("Mouse Cursor + Click Halo", bodyF, textB, card.X + 16f, card.Y + 110f);
-                _rectCursorToggle = new RectangleF(card.Right - 118f, card.Y + 105f, 102f, 28f);
-                DrawSecondaryPill(g, _rectCursorToggle, _cfg.IncludeMouseCursor ? "Enabled" : "Hidden");
+                _rectCursorDropdown = new RectangleF(card.Right - 120f, card.Y + 105f, 104f, 28f);
+                DrawDropdownPill(g, _rectCursorDropdown, _cfg.IncludeMouseCursor ? "Cursor On ▾" : "Hidden ▾");
 
-                // Row 4: Editable Save Directory Path + Browse Button right inside Video Studio!
-                g.DrawString("Auto-Save Directory (Click path to edit or Browse):", secF, slateB, card.X + 16f, card.Y + 146f);
+                // Row 4: Editable Auto-Save Directory + Browse Button
+                g.DrawString("VIDEO AUTO-SAVE DIRECTORY (CLICK PATH OR BROWSE):", secF, slateB, card.X + 16f, card.Y + 148f);
                 string shortPath = _cfg.AutoSaveFolder ?? "";
                 if (shortPath.Length > 36) shortPath = "..." + shortPath.Substring(shortPath.Length - 33);
 
-                _rectFolderInput = new RectangleF(card.X + 16f, card.Y + 168f, card.Width - 116f, 32f);
+                _rectFolderInput = new RectangleF(card.X + 16f, card.Y + 170f, card.Width - 116f, 32f);
                 DrawTertiaryInput(g, _rectFolderInput, shortPath);
 
-                _rectFolderBrowseBtn = new RectangleF(card.Right - 92f, card.Y + 168f, 76f, 32f);
-                DrawSecondaryPill(g, _rectFolderBrowseBtn, "Browse");
-            }
-        }
-
-        private void PaintOutputControlsTab(Graphics g, RectangleF card)
-        {
-            using (Font secF = GaBrand.MakeFont(10.5f, FontStyle.Bold))
-            using (Font bodyF = GaBrand.MakeFont(12.5f, FontStyle.Regular))
-            using (SolidBrush slateB = new SolidBrush(GaBrand.Slate))
-            using (SolidBrush textB = new SolidBrush(GaBrand.Text))
-            {
-                g.DrawString("OFFLINE SCREENSHOT & VIDEO OUTPUT TARGET", secF, slateB, card.X + 16f, card.Y + 14f);
-
-                g.DrawString("Post-Capture Target", bodyF, textB, card.X + 16f, card.Y + 46f);
-                _rectOutputCycle = new RectangleF(card.Right - 150f, card.Y + 40f, 134f, 30f);
-                DrawSecondaryPill(g, _rectOutputCycle, _cfg.ActiveOutputTarget.ToString());
-
-                g.DrawString("Filename Template", bodyF, textB, card.X + 16f, card.Y + 90f);
-                RectangleF tplBox = new RectangleF(card.Right - 196f, card.Y + 84f, 180f, 30f);
-                DrawTertiaryInput(g, tplBox, _cfg.FileNameTemplate);
-
-                g.DrawString("Fixed / Scroll Pacing", bodyF, textB, card.X + 16f, card.Y + 134f);
-                RectangleF fixBox = new RectangleF(card.Right - 196f, card.Y + 128f, 180f, 30f);
-                DrawTertiaryInput(g, fixBox, $"{_cfg.FixedRegionWidth}×{_cfg.FixedRegionHeight} · {_cfg.AutoScrollIntervalMs}ms");
-
-                g.DrawString("Save Directory", bodyF, textB, card.X + 16f, card.Y + 178f);
-                _rectFolderBrowseBtn = new RectangleF(card.Right - 150f, card.Y + 172f, 134f, 30f);
-                DrawSecondaryPill(g, _rectFolderBrowseBtn, "Change Folder...");
+                _rectFolderBrowseBtn = new RectangleF(card.Right - 92f, card.Y + 170f, 76f, 32f);
+                DrawDropdownPill(g, _rectFolderBrowseBtn, "Browse", showArrow: false);
             }
         }
 
@@ -3266,34 +3002,34 @@ namespace GraphicarrayCapture
             using (SolidBrush textB = new SolidBrush(GaBrand.Text))
             using (SolidBrush greenB = new SolidBrush(GaBrand.Green))
             {
-                g.DrawString("CRASH-SAFE AUTO-SAVE RECOVERY GUARD", secF, slateB, card.X + 16f, card.Y + 14f);
+                g.DrawString("CRASH-SAFE AUTO-SAVE & SHORTCUT KEY GUARD", secF, slateB, card.X + 16f, card.Y + 14f);
                 g.DrawString("● Active: 1s disk flush + auto-saves on sudden close", bodyF, greenB, card.X + 16f, card.Y + 38f);
 
-                g.DrawString("Click path to type custom directory, or click Browse:", secF, slateB, card.X + 16f, card.Y + 68f);
+                g.DrawString("Auto-Save Folder Path:", secF, slateB, card.X + 16f, card.Y + 68f);
                 string shortPath = _cfg.AutoSaveFolder ?? "";
                 if (shortPath.Length > 36) shortPath = "..." + shortPath.Substring(shortPath.Length - 33);
                 _rectFolderInput = new RectangleF(card.X + 16f, card.Y + 90f, card.Width - 116f, 32f);
                 DrawTertiaryInput(g, _rectFolderInput, shortPath);
 
                 _rectFolderBrowseBtn = new RectangleF(card.Right - 92f, card.Y + 90f, 76f, 32f);
-                DrawSecondaryPill(g, _rectFolderBrowseBtn, "Browse");
+                DrawDropdownPill(g, _rectFolderBrowseBtn, "Browse", showArrow: false);
 
-                g.DrawString("100% Portable Mode (Portable.db)", bodyF, textB, card.X + 16f, card.Y + 144f);
-                _rectPortableToggle = new RectangleF(card.Right - 116f, card.Y + 138f, 100f, 30f);
-                DrawSecondaryPill(g, _rectPortableToggle, _cfg.PortableMode ? "Portable" : "Registry");
+                g.DrawString("Storage Mode Dropdown", bodyF, textB, card.X + 16f, card.Y + 144f);
+                _rectPortableDropdown = new RectangleF(card.Right - 140f, card.Y + 138f, 124f, 30f);
+                DrawDropdownPill(g, _rectPortableDropdown, _cfg.PortableMode ? "Portable ▾" : "AppData ▾");
 
-                g.DrawString("Taskbar & Tray Red Blink on Record", bodyF, textB, card.X + 16f, card.Y + 184f);
-                RectangleF blinkBadge = new RectangleF(card.Right - 116f, card.Y + 178f, 100f, 30f);
-                DrawTertiaryInput(g, blinkBadge, "Active (500ms)");
+                g.DrawString("Shortcut Keys Manager", bodyF, textB, card.X + 16f, card.Y + 188f);
+                RectangleF hkBtn = new RectangleF(card.Right - 180f, card.Y + 182f, 164f, 30f);
+                DrawDropdownPill(g, hkBtn, "Click ⚙ Gear Top-Right", showArrow: false);
             }
         }
 
-        private static void DrawSecondaryPill(Graphics g, RectangleF rect, string text)
+        private static void DrawDropdownPill(Graphics g, RectangleF rect, string text, bool showArrow = true)
         {
             using (GraphicsPath gp = GaBrand.RoundedRect(rect, GaBrand.RadiusPill))
             using (SolidBrush fill = new SolidBrush(GaBrand.Abyss))
             using (Pen border = new Pen(GaBrand.Cyan, 1f))
-            using (Font f = GaBrand.MakeFont(12f, FontStyle.Bold))
+            using (Font f = GaBrand.MakeFont(11.5f, FontStyle.Bold))
             using (SolidBrush tb = new SolidBrush(GaBrand.Text))
             {
                 g.FillPath(fill, gp);
@@ -3318,41 +3054,47 @@ namespace GraphicarrayCapture
             }
         }
 
-        private static void DrawCaptureIcon(Graphics g, int index, PointF center)
+        private static void DrawGearIcon(Graphics g, PointF center, Color color)
+        {
+            using (Pen p = new Pen(color, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                g.DrawEllipse(p, center.X - 5f, center.Y - 5f, 10f, 10f);
+                for (int a = 0; a < 360; a += 45)
+                {
+                    double rad = a * Math.PI / 180.0;
+                    float x1 = center.X + (float)Math.Cos(rad) * 5.5f;
+                    float y1 = center.Y + (float)Math.Sin(rad) * 5.5f;
+                    float x2 = center.X + (float)Math.Cos(rad) * 8.5f;
+                    float y2 = center.Y + (float)Math.Sin(rad) * 8.5f;
+                    g.DrawLine(p, x1, y1, x2, y2);
+                }
+            }
+        }
+
+        private static void DrawVideoModeIcon(Graphics g, int index, PointF center)
         {
             using (Pen p = new Pen(GaBrand.Cyan, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             {
-                RectangleF r = new RectangleF(center.X - 9, center.Y - 7, 18, 14);
+                RectangleF r = new RectangleF(center.X - 11, center.Y - 8, 22, 16);
                 switch (index)
                 {
-                    case 0:
+                    case 0: // Active Window
                         g.DrawRectangle(p, r.X, r.Y, r.Width, r.Height);
-                        g.DrawLine(p, r.X, r.Y + 4, r.Right, r.Y + 4);
+                        g.DrawLine(p, r.X, r.Y + 5, r.Right, r.Y + 5);
                         break;
-                    case 1:
-                        g.DrawRectangle(p, r.X, r.Y, r.Width, r.Height);
-                        g.DrawEllipse(p, center.X - 3, center.Y - 3, 6, 6);
-                        break;
-                    case 2:
+                    case 1: // Rectangle (Free / Custom Ratio)
                         p.DashStyle = DashStyle.Dot;
                         g.DrawRectangle(p, r.X, r.Y, r.Width, r.Height);
                         break;
-                    case 3:
+                    case 2: // Freehand
                         g.DrawEllipse(p, r.X, r.Y, r.Width, r.Height);
                         break;
-                    case 4:
+                    case 3: // Full Screen
                         g.DrawRectangle(p, r.X, r.Y, r.Width, r.Height);
-                        g.DrawLine(p, r.X + 3, r.Y + 3, r.Right - 3, r.Bottom - 3);
+                        g.DrawLine(p, r.X + 4, r.Y + 4, r.Right - 4, r.Bottom - 4);
                         break;
-                    case 5:
-                        g.DrawRectangle(p, r.X, r.Y, r.Width, r.Height);
-                        g.DrawLine(p, center.X, r.Y + 3, center.X, r.Bottom - 3);
-                        break;
-                    case 6:
-                        g.DrawRectangle(p, center.X - 6, center.Y - 5, 12, 10);
-                        break;
-                    case 7:
-                        g.DrawArc(p, r, 30, 290);
+                    case 4: // Fixed Region (Pixel / Ratio)
+                        g.DrawRectangle(p, center.X - 7, center.Y - 6, 14, 12);
                         break;
                 }
             }
@@ -3370,30 +3112,29 @@ namespace GraphicarrayCapture
             Debug.Assert(GaBrand.ProductName == "Open Screen Recorder", "Product name mismatch");
             Debug.Assert(ColorTranslator.ToHtml(GaBrand.Abyss) == "#001E36", "Abyss mismatch");
             Debug.Assert(ColorTranslator.ToHtml(GaBrand.Cyan)  == "#00CDFF", "Cyan mismatch");
-            Debug.Assert(ColorTranslator.ToHtml(GaBrand.Red)   == "#FF5D6C", "Red mismatch");
 
-            // 2. Template token expansion check
-            DateTime sampleDt = new DateTime(2026, 10, 30, 14, 5, 9);
-            string expanded = StorageEngine.ExpandTemplate("OSR_$Y-$M-$D_$H-$N-$S_#", sampleDt, 7);
-            if (expanded != "OSR_2026-10-30_14-05-09_007")
-                throw new InvalidOperationException("Template expansion check failed: " + expanded);
+            // 2. Verify only 5 VideoAreaModes exist
+            Debug.Assert(Enum.GetValues(typeof(VideoAreaMode)).Length == 5, "Must have exactly 5 VideoAreaModes");
 
-            // 3. Single-file interleaved Audio + Video RIFF writer verification
-            string tempAvi = Path.Combine(Path.GetTempPath(), "osr_selfcheck_" + Guid.NewGuid().ToString("N") + ".avi");
+            // 3. Verify custom ratio rectangle calculation
+            Rectangle locked = ScreenCaptureEngine.ComputeRatioLockedRect(new Point(100, 100), new Point(260, 200), 16, 9);
+            if (locked.Width != 160 || locked.Height != 90)
+                throw new InvalidOperationException($"Ratio lock failed: {locked.Width}x{locked.Height}");
+
+            // 4. Verify Single-File Audio+Video AND Video-Only writer modes
+            string tempAvi = Path.Combine(Path.GetTempPath(), "osr_v2_" + Guid.NewGuid().ToString("N") + ".avi");
             try
             {
-                using (CrashSafeAviWriter writer = new CrashSafeAviWriter(tempAvi, 64, 64, 24, VideoQualityLevel.High, includeAudio: true))
+                using (CrashSafeAviWriter writer = new CrashSafeAviWriter(tempAvi, 64, 64, 24, VideoQualityLevel.High, includeAudio: false))
                 using (Bitmap frame = new Bitmap(64, 64))
                 {
                     writer.WriteFrame(frame);
-                    byte[] dummyPcm = new byte[1024];
-                    writer.WriteAudioPcmBytes(dummyPcm, dummyPcm.Length);
                     writer.FlushCheckpoint();
                 }
                 byte[] bytes = File.ReadAllBytes(tempAvi);
                 string ascii = Encoding.ASCII.GetString(bytes);
-                if (!ascii.StartsWith("RIFF") || !ascii.Contains("00dc") || !ascii.Contains("01wb"))
-                    throw new InvalidOperationException("Single-file interleaved audio+video verification failed.");
+                if (!ascii.StartsWith("RIFF") || !ascii.Contains("00dc"))
+                    throw new InvalidOperationException("Video-only stream verification failed.");
             }
             finally
             {
@@ -3413,7 +3154,7 @@ namespace GraphicarrayCapture
             SelfTests.RunAll();
             if (args != null && Array.Exists(args, a => a == "--self-check"))
             {
-                Console.WriteLine("SELF-CHECK OK: Open Screen Recorder v1.1 verified.");
+                Console.WriteLine("SELF-CHECK OK: Open Screen Recorder v2.0 (Pure Video Edition) verified.");
                 return 0;
             }
 

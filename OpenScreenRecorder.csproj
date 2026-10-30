@@ -9,11 +9,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>OpenScreenRecorder</AssemblyName>
     <RootNamespace>GraphicarrayCapture</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>2.0.0</Version>
     <Company>Graphicarray</Company>
     <Authors>Md Numan Ahmed</Authors>
     <Product>Open Screen Recorder</Product>
-    <Description>Open Screen Recorder — Offline Screen Capture &amp; Single-File Crash-Safe Video Recorder by Graphicarray</Description>
+    <Description>Open Screen Recorder v2.0 — 100% Offline Crash-Safe Video Recorder by Graphicarray</Description>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
