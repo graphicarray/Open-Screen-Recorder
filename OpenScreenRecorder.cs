@@ -240,6 +240,45 @@ namespace GraphicarrayCapture
             }
         }
 
+        // Creates 32x32 transparent overlay badge for Windows 10/11 Taskbar (ITaskbarList3::SetOverlayIcon)
+        public static Icon CreateTaskbarOverlayIcon(bool isPaused)
+        {
+            using (Bitmap bmp = new Bitmap(32, 32, PixelFormat.Format32bppArgb))
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.Transparent);
+                if (!isPaused)
+                {
+                    // Bright glowing round red dot with crisp white border
+                    using (SolidBrush outerGlow = new SolidBrush(Color.FromArgb(180, Red)))
+                    using (SolidBrush redCore = new SolidBrush(Red))
+                    using (Pen whiteRing = new Pen(Text, 2.5f))
+                    {
+                        g.FillEllipse(outerGlow, 1, 1, 30, 30);
+                        g.FillEllipse(redCore, 4, 4, 24, 24);
+                        g.DrawEllipse(whiteRing, 4, 4, 24, 24);
+                    }
+                }
+                else
+                {
+                    using (SolidBrush amberCore = new SolidBrush(Amber))
+                    using (Pen whiteRing = new Pen(Text, 2f))
+                    using (Pen abyssPen = new Pen(Abyss, 3f))
+                    {
+                        g.FillEllipse(amberCore, 4, 4, 24, 24);
+                        g.DrawEllipse(whiteRing, 4, 4, 24, 24);
+                        g.DrawLine(abyssPen, 13, 10, 13, 22);
+                        g.DrawLine(abyssPen, 19, 10, 19, 22);
+                    }
+                }
+                IntPtr hIcon = bmp.GetHicon();
+                Icon cloned = (Icon)Icon.FromHandle(hIcon).Clone();
+                NativeMethods.DestroyIcon(hIcon);
+                return cloned;
+            }
+        }
+
         public static Icon CreateStatusIcon(int state)
         {
             // state 0: try embedded executable icon or brand/logo.ico first, fallback to GDI+ vector logo
@@ -335,6 +374,42 @@ namespace GraphicarrayCapture
     // ========================================================================
     // 2. WIN32 LOW-LEVEL PRIMITIVES (GDI32, USER32, KERNEL32, WINMM WAVEIN)
     // ========================================================================
+    // Windows 7/8/10/11 Taskbar Overlay Icon COM Interface (ITaskbarList3)
+    [ComImport]
+    [Guid("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface ITaskbarList3
+    {
+        // ITaskbarList
+        [PreserveSig] int HrInit();
+        [PreserveSig] int AddTab(IntPtr hwnd);
+        [PreserveSig] int DeleteTab(IntPtr hwnd);
+        [PreserveSig] int ActivateTab(IntPtr hwnd);
+        [PreserveSig] int SetActiveAlt(IntPtr hwnd);
+
+        // ITaskbarList2
+        [PreserveSig] int MarkFullscreenWindow(IntPtr hwnd, [MarshalAs(UnmanagedType.Bool)] bool fFullscreen);
+
+        // ITaskbarList3
+        [PreserveSig] int SetProgressValue(IntPtr hwnd, ulong ullCompleted, ulong ullTotal);
+        [PreserveSig] int SetProgressState(IntPtr hwnd, int tbpFlags);
+        [PreserveSig] int RegisterTab(IntPtr hwndTab, IntPtr hwndMDI);
+        [PreserveSig] int UnregisterTab(IntPtr hwndTab);
+        [PreserveSig] int SetTabOrder(IntPtr hwndTab, IntPtr hwndInsertBefore);
+        [PreserveSig] int SetTabActive(IntPtr hwndTab, IntPtr hwndMDI, uint dwReserved);
+        [PreserveSig] int ThumbBarAddButtons(IntPtr hwnd, uint cButtons, IntPtr pButton);
+        [PreserveSig] int ThumbBarUpdateButtons(IntPtr hwnd, uint cButtons, IntPtr pButton);
+        [PreserveSig] int ThumbBarSetImageList(IntPtr hwnd, IntPtr himl);
+        [PreserveSig] int SetOverlayIcon(IntPtr hwnd, IntPtr hIcon, [MarshalAs(UnmanagedType.LPWStr)] string pszDescription);
+        [PreserveSig] int SetThumbnailTooltip(IntPtr hwnd, [MarshalAs(UnmanagedType.LPWStr)] string pszTip);
+        [PreserveSig] int SetThumbnailClip(IntPtr hwnd, IntPtr prcClip);
+    }
+
+    [ComImport]
+    [Guid("56FDF344-FD6D-11d0-958A-006097C9A090")]
+    [ClassInterface(ClassInterfaceType.None)]
+    public class TaskbarList { }
+
     public static class NativeMethods
     {
         public const int WM_HOTKEY = 0x0312;
@@ -2060,6 +2135,10 @@ namespace GraphicarrayCapture
         private readonly Icon _iconIdle;
         private readonly Icon _iconRecRed;
         private readonly Icon _iconPausedAmber;
+        private readonly Icon _overlayRedDot;
+        private readonly Icon _overlayPausedAmber;
+        private ITaskbarList3 _taskbarList;
+        private bool _taskbarOverlayActive;
         private readonly GaDropdownRenderer _menuRenderer = new GaDropdownRenderer();
 
         // Hit-test rectangles
@@ -2095,6 +2174,8 @@ namespace GraphicarrayCapture
             _iconIdle = GaBrand.CreateStatusIcon(0);
             _iconRecRed = GaBrand.CreateStatusIcon(1);
             _iconPausedAmber = GaBrand.CreateStatusIcon(2);
+            _overlayRedDot = GaBrand.CreateTaskbarOverlayIcon(isPaused: false);
+            _overlayPausedAmber = GaBrand.CreateTaskbarOverlayIcon(isPaused: true);
 
             Text = GaBrand.ProductName;
             Icon = _iconIdle;
@@ -2132,11 +2213,13 @@ namespace GraphicarrayCapture
             bool isRec = _recorder != null && _recorder.IsRecording;
             if (isRec)
             {
+                _taskbarOverlayActive = true;
                 if (_recorder.IsPaused)
                 {
                     GaBrand.ApplyWindowIcon(this, _iconPausedAmber);
                     _trayIcon.Icon = _iconPausedAmber;
                     _trayIcon.Text = $"PAUSED · Open Screen Recorder ({_recorder.Elapsed:hh\\:mm\\:ss})";
+                    UpdateTaskbarOverlay(_overlayPausedAmber.Handle, "Recording Paused");
                 }
                 else
                 {
@@ -2145,15 +2228,18 @@ namespace GraphicarrayCapture
                     GaBrand.ApplyWindowIcon(this, activeIcon);
                     _trayIcon.Icon = activeIcon;
                     _trayIcon.Text = $"● REC {_recorder.Elapsed:hh\\:mm\\:ss} · Open Screen Recorder";
+                    UpdateTaskbarOverlay(_blinkRedPhase ? _overlayRedDot.Handle : IntPtr.Zero, _blinkRedPhase ? "Recording Active" : "");
                     _guidelineOverlay?.SetBlinkPhase(_blinkRedPhase);
                 }
                 Invalidate();
             }
-            else if (Icon != _iconIdle)
+            else if (_taskbarOverlayActive || Icon != _iconIdle)
             {
+                _taskbarOverlayActive = false;
                 GaBrand.ApplyWindowIcon(this, _iconIdle);
                 _trayIcon.Icon = _iconIdle;
                 _trayIcon.Text = "Open Screen Recorder by Graphicarray";
+                UpdateTaskbarOverlay(IntPtr.Zero, null);
                 Invalidate();
             }
         }
@@ -2162,7 +2248,23 @@ namespace GraphicarrayCapture
         {
             base.OnHandleCreated(e);
             GaBrand.ApplyWindowIcon(this, _iconIdle);
+            try
+            {
+                _taskbarList = (ITaskbarList3)new TaskbarList();
+                _taskbarList.HrInit();
+            }
+            catch { _taskbarList = null; }
             ReRegisterAllShortcuts();
+        }
+
+        private void UpdateTaskbarOverlay(IntPtr hOverlayIcon, string tooltip)
+        {
+            try
+            {
+                if (_taskbarList != null && IsHandleCreated)
+                    _taskbarList.SetOverlayIcon(Handle, hOverlayIcon, tooltip);
+            }
+            catch { }
         }
 
         private void ReRegisterAllShortcuts()
@@ -2456,6 +2558,7 @@ namespace GraphicarrayCapture
                 CloseGuidelineOverlay();
                 string savedPath = _recorder.StopAndSave(emergency: false, reason: "UserButtonOrHotkey");
                 _recorder = null;
+                UpdateTaskbarOverlay(IntPtr.Zero, null);
                 _statusToast = "Saved video: " + Path.GetFileName(savedPath);
                 Invalidate();
                 return;
@@ -3146,6 +3249,76 @@ namespace GraphicarrayCapture
     // ========================================================================
     public static class SelfTests
     {
+                public static void WriteNsisInstallerScript()
+        {
+            try
+            {
+                Directory.CreateDirectory("brand");
+                string icoPath = Path.Combine("brand", "logo.ico");
+                if (!File.Exists(icoPath))
+                {
+                    using (Icon ic = GaBrand.CreateStatusIcon(0))
+                    using (FileStream fs = new FileStream(icoPath, FileMode.Create, FileAccess.Write))
+                    {
+                        ic.Save(fs);
+                    }
+                }
+
+                string nsi = @"!include ""MUI2.nsh""
+Name ""Open Screen Recorder""
+OutFile ""dist\Output\OpenScreenRecorder_Setup.exe""
+InstallDir ""$PROGRAMFILES64\Open Screen Recorder""
+InstallDirRegKey HKLM ""Software\Graphicarray\Open Screen Recorder"" ""Install_Dir""
+RequestExecutionLevel admin
+SetCompressor /SOLID lzma
+!define MUI_ABORTWARNING
+!define MUI_FINISHPAGE_RUN ""$INSTDIR\OpenScreenRecorder.exe""
+!define MUI_FINISHPAGE_RUN_TEXT ""Launch Open Screen Recorder (by Graphicarray)""
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE ""English""
+Section ""Open Screen Recorder"" SecMain
+  SectionIn RO
+  SetOutPath ""$INSTDIR""
+  Delete ""$INSTDIR\Portable.db""
+  File /r ""dist\InstallerPayload\*.*""
+  WriteRegStr HKLM ""Software\Graphicarray\Open Screen Recorder"" ""Install_Dir"" ""$INSTDIR""
+  WriteRegStr HKLM ""Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder"" ""DisplayName"" ""Open Screen Recorder (by Graphicarray)""
+  WriteRegStr HKLM ""Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder"" ""Publisher"" ""Graphicarray - Md Numan Ahmed""
+  WriteRegStr HKLM ""Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder"" ""URLInfoAbout"" ""https://www.linkedin.com/in/graphicarray""
+  WriteRegStr HKLM ""Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder"" ""DisplayIcon"" ""$INSTDIR\OpenScreenRecorder.exe""
+  WriteRegStr HKLM ""Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder"" ""DisplayVersion"" ""2.0.0""
+  WriteRegStr HKLM ""Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder"" ""UninstallString"" '""$INSTDIR\Uninstall.exe""'
+  WriteRegDWORD HKLM ""Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder"" ""NoModify"" 1
+  WriteRegDWORD HKLM ""Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder"" ""NoRepair"" 1
+  WriteUninstaller ""$INSTDIR\Uninstall.exe""
+  CreateDirectory ""$SMPROGRAMS\Open Screen Recorder""
+  CreateShortcut ""$SMPROGRAMS\Open Screen Recorder\Open Screen Recorder.lnk"" ""$INSTDIR\OpenScreenRecorder.exe""
+  CreateShortcut ""$SMPROGRAMS\Open Screen Recorder\Uninstall.lnk"" ""$INSTDIR\Uninstall.exe""
+  CreateShortcut ""$DESKTOP\Open Screen Recorder.lnk"" ""$INSTDIR\OpenScreenRecorder.exe""
+SectionEnd
+Section ""Uninstall""
+  Delete ""$DESKTOP\Open Screen Recorder.lnk""
+  Delete ""$SMPROGRAMS\Open Screen Recorder\*.*""
+  RMDir ""$SMPROGRAMS\Open Screen Recorder""
+  RMDir /r ""$INSTDIR\brand""
+  Delete ""$INSTDIR\OpenScreenRecorder.exe""
+  Delete ""$INSTDIR\ffmpeg.exe""
+  Delete ""$INSTDIR\Uninstall.exe""
+  RMDir ""$INSTDIR""
+  DeleteRegKey HKLM ""Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenScreenRecorder""
+  DeleteRegKey HKLM ""Software\Graphicarray\Open Screen Recorder""
+SectionEnd
+";
+                File.WriteAllText("installer.nsi", nsi, Encoding.ASCII);
+            }
+            catch { }
+        }
+
         public static void RunAll()
         {
             // 1. Brand palette & product identity assertions
@@ -3194,6 +3367,7 @@ namespace GraphicarrayCapture
             SelfTests.RunAll();
             if (args != null && Array.Exists(args, a => a == "--self-check"))
             {
+                SelfTests.WriteNsisInstallerScript();
                 Console.WriteLine("SELF-CHECK OK: Open Screen Recorder v2.0 (Pure Video Edition) verified.");
                 return 0;
             }
